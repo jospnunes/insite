@@ -23,7 +23,23 @@ macro_rules! catalog {
     };
 }
 
-catalog!["net.redirect.loop", "net.redirect.too_many",];
+catalog![
+    "net.redirect.loop",
+    "net.redirect.too_many",
+    "tls.cert.expired",
+    "tls.cert.not_yet_valid",
+    "tls.cert.expiring",
+    "tls.cert.name_mismatch",
+    "tls.cert.self_signed",
+    "tls.chain.incomplete",
+    "tls.cert.untrusted",
+    "tls.cert.weak_key",
+    "tls.cert.sha1",
+    "tls.version.no_tls13",
+    "tls.clock_skew",
+    "tls.hop.invalid",
+    "tls.handshake.incompatible",
+];
 
 pub struct Entry<'a> {
     pub severity: Severity,

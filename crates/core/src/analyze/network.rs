@@ -204,7 +204,7 @@ fn phases(hop: &Hop) -> Phases {
 
 /// The connection that carried `hop`: its own, or the latest one opened to the
 /// same origin earlier in the chain.
-fn opener<'a>(chain: &'a [Hop], hop: &'a Hop) -> Option<&'a ConnectionInfo> {
+pub(crate) fn opener<'a>(chain: &'a [Hop], hop: &'a Hop) -> Option<&'a ConnectionInfo> {
     let origin = |h: &Hop| Url::parse(&h.url).ok().map(|u| u.origin());
     let target = origin(hop)?;
     chain

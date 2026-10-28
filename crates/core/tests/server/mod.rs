@@ -112,13 +112,17 @@ impl Server {
 fn tls_acceptor(alpn: &[&[u8]]) -> (TlsAcceptor, Vec<u8>) {
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).unwrap();
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "insite test CA");
     let ca = CertifiedIssuer::self_signed(ca_params, KeyPair::generate().unwrap()).unwrap();
 
     let leaf_key = KeyPair::generate().unwrap();
-    let leaf = CertificateParams::new(vec!["localhost".to_owned()])
-        .unwrap()
-        .signed_by(&leaf_key, &ca)
-        .unwrap();
+    let mut leaf_params = CertificateParams::new(vec!["localhost".to_owned()]).unwrap();
+    leaf_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "localhost");
+    let leaf = leaf_params.signed_by(&leaf_key, &ca).unwrap();
 
     let key = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(leaf_key.serialize_der()));
     let provider = Arc::new(rustls::crypto::ring::default_provider());

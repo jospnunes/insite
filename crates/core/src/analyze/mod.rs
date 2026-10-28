@@ -1,6 +1,7 @@
 //! Analysis: pure functions from `Snapshot` to `Report`. No network, no clock.
 
 pub mod network;
+pub mod tls;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -13,7 +14,8 @@ use crate::snapshot::Snapshot;
 pub fn analyze(snapshot: &Snapshot) -> Report {
     let network = network::analyze(snapshot);
     let final_url = network.data.as_ref().and_then(|n| n.final_url.clone());
-    let outcome = outcome(snapshot, &[("network", network.status)]);
+    let tls = tls::analyze(snapshot);
+    let outcome = outcome(snapshot, &[("network", network.status), ("tls", tls.status)]);
 
     Report {
         schema_version: SCHEMA_VERSION,
@@ -29,7 +31,7 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
         started_at: rfc3339(snapshot.collected_at),
         duration_ms: network::ms(snapshot.duration),
         outcome,
-        modules: Modules { network },
+        modules: Modules { network, tls },
     }
 }
 

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 
 use crate::analyze::network::Network;
+use crate::analyze::tls::Tls;
 
 /// Semver: a new field bumps the minor version, a removal or type change the major.
 pub const SCHEMA_VERSION: &str = "0.1.0";
@@ -59,6 +60,7 @@ impl Outcome {
 #[derive(Debug, Clone, Serialize)]
 pub struct Modules {
     pub network: Module<Network>,
+    pub tls: Module<Tls>,
 }
 
 #[derive(Debug, Clone, Serialize)]

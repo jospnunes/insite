@@ -19,7 +19,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use url::Host;
 
-use crate::snapshot::{FailureKind, TlsInfo, Verification};
+use crate::snapshot::{CertProblem, FailureKind, TlsInfo, Verification};
 
 #[derive(Clone)]
 pub struct Tls {
@@ -104,7 +104,10 @@ fn describe(
         None => "unknown".to_owned(),
     };
     let recorded = recorded.unwrap_or(Recorded {
-        verification: Verification::Invalid("the server sent no certificate".into()),
+        verification: Verification::Invalid {
+            problem: CertProblem::Other,
+            message: "the server sent no certificate".into(),
+        },
         certificates: Vec::new(),
         ocsp_stapled: false,
     });
@@ -160,6 +163,22 @@ fn fatal(kind: FailureKind, message: String) -> TlsError {
     }
 }
 
+fn problem(e: &rustls::Error) -> CertProblem {
+    use rustls::CertificateError as C;
+    match e {
+        rustls::Error::InvalidCertificate(c) => match c {
+            C::Expired | C::ExpiredContext { .. } => CertProblem::Expired,
+            C::NotValidYet | C::NotValidYetContext { .. } => CertProblem::NotYetValid,
+            C::UnknownIssuer => CertProblem::UnknownIssuer,
+            C::NotValidForName | C::NotValidForNameContext { .. } => CertProblem::NameMismatch,
+            C::Revoked => CertProblem::Revoked,
+            C::BadSignature => CertProblem::BadSignature,
+            _ => CertProblem::Other,
+        },
+        _ => CertProblem::Other,
+    }
+}
+
 struct Recorded {
     verification: Verification,
     certificates: Vec<Vec<u8>>,
@@ -201,7 +220,10 @@ impl ServerCertVerifier for RecordingVerifier {
                 .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
             {
                 Ok(_) => Verification::Valid,
-                Err(e) => Verification::Invalid(e.to_string()),
+                Err(e) => Verification::Invalid {
+                    problem: problem(&e),
+                    message: e.to_string(),
+                },
             };
         let certificates = std::iter::once(end_entity)
             .chain(intermediates)

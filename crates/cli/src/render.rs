@@ -48,7 +48,13 @@ pub fn terminal(report: &Report, color: bool) -> String {
         headline(&mut out, &s, &host, net);
     }
 
-    let findings: Vec<_> = report.modules.network.findings.iter().collect();
+    let findings: Vec<_> = report
+        .modules
+        .network
+        .findings
+        .iter()
+        .chain(&report.modules.tls.findings)
+        .collect();
     if !findings.is_empty() {
         out.push('\n');
         for f in findings {

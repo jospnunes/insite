@@ -15,7 +15,7 @@ use insite_core::collect::target::Target;
 use insite_core::collect::{Collector, Options, Ports};
 use insite_core::report::Outcome;
 use insite_core::snapshot::{
-    ConnectionUse, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
+    CertProblem, ConnectionUse, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
 };
 use server::{Server, TlsMode, ok, redirect};
 
@@ -81,9 +81,16 @@ async fn untrusted_certificate_is_recorded_not_fatal() {
     let ConnectionUse::New(conn) = &snap.chain[0].connection else {
         panic!()
     };
-    assert!(
-        matches!(&conn.tls.as_ref().unwrap().verification, Verification::Invalid(m) if m.contains("UnknownIssuer"))
-    );
+    assert!(matches!(
+        &conn.tls.as_ref().unwrap().verification,
+        Verification::Invalid {
+            problem: CertProblem::UnknownIssuer,
+            ..
+        }
+    ));
+    let tls = analyze(&snap).modules.tls;
+    assert_eq!(tls.findings.len(), 1);
+    assert_eq!(tls.findings[0].id, "tls.cert.untrusted");
     assert_eq!(snap.page.unwrap().body, b"page");
 }
 

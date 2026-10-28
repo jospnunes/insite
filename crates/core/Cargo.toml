@@ -21,6 +21,7 @@ idna.workspace = true
 flate2.workspace = true
 brotli-decompressor.workspace = true
 serde.workspace = true
+x509-parser.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time"] }

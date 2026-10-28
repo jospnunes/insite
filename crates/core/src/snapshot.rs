@@ -139,7 +139,23 @@ pub struct TlsInfo {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Verification {
     Valid,
-    Invalid(String),
+    /// webpki stops at the first problem; the TLS analyzer checks dates and names
+    /// on its own, so it can report every problem, not just this one.
+    Invalid {
+        problem: CertProblem,
+        message: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CertProblem {
+    Expired,
+    NotYetValid,
+    UnknownIssuer,
+    NameMismatch,
+    Revoked,
+    BadSignature,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
