@@ -1,0 +1,310 @@
+//! Connection engine against local servers: protocols, redirects, encodings,
+//! limits, deadlines, retries and the port 80 fallback.
+
+mod server;
+
+use std::time::Duration;
+
+use http::Response;
+use http_body_util::Full;
+use hyper::body::Bytes;
+use insite_core::analyze::analyze;
+use insite_core::analyze::network::HttpsEnforcement;
+use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
+use insite_core::collect::target::Target;
+use insite_core::collect::{Collector, Options, Ports};
+use insite_core::report::Outcome;
+use insite_core::snapshot::{
+    ConnectionUse, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
+};
+use server::{Server, TlsMode, ok, redirect};
+
+const H2_AND_H1: &[&[u8]] = &[b"h2", b"http/1.1"];
+const H1_ONLY: &[&[u8]] = &[b"http/1.1"];
+
+fn options() -> Options {
+    let mut opts = Options::new(RequestProfile {
+        user_agent: "insite-test/1".into(),
+        accept_language: "pt-BR,pt;q=0.9,en;q=0.8".into(),
+        accept_encoding: ACCEPT_ENCODING_VALUE.into(),
+    });
+    opts.timeout = Duration::from_secs(5);
+    opts
+}
+
+async fn collect(server: &Server, path: &str, trust: bool, opts: &Options) -> Snapshot {
+    let roots = if trust {
+        vec![server.ca_der.clone().expect("TLS server")]
+    } else {
+        vec![]
+    };
+    let collector = Collector::new(&roots).unwrap();
+    let scheme = if server.ca_der.is_some() { "https" } else { "http" };
+    let target = Target::parse(&format!("{scheme}://localhost:{}{path}", server.addr.port())).unwrap();
+    collector.collect(&target, opts).await
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http2_with_trusted_chain() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |req| async move {
+        let ua = req.headers()["user-agent"].to_str().unwrap().to_owned();
+        let lang = req.headers()["accept-language"].to_str().unwrap().to_owned();
+        ok(format!("{ua}|{lang}"))
+    })
+    .await;
+    let snap = collect(&server, "/", true, &options()).await;
+
+    assert!(snap.failure.is_none(), "{:?}", snap.failure);
+    assert_eq!(snap.chain.len(), 1);
+    let hop = &snap.chain[0];
+    assert_eq!((hop.status, hop.version, hop.attempts), (200, HttpVersion::Http2, 1));
+    let ConnectionUse::New(conn) = &hop.connection else {
+        panic!("first hop opens a connection")
+    };
+    let tls = conn.tls.as_ref().unwrap();
+    assert_eq!(tls.verification, Verification::Valid);
+    assert_eq!(tls.version, "TLS 1.3");
+    assert_eq!(tls.alpn.as_deref(), Some("h2"));
+    assert_eq!(tls.sni.as_deref(), Some("localhost"));
+    assert!(conn.resolution.as_ref().unwrap().duration.is_some());
+    assert_eq!(snap.page.unwrap().body, b"insite-test/1|pt-BR,pt;q=0.9,en;q=0.8");
+    // An explicit port disables the port 80 check: one connection, one request.
+    assert!(snap.http_check.is_none());
+    assert_eq!((server.connections(), server.requests()), (1, 1));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn untrusted_certificate_is_recorded_not_fatal() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("page") }).await;
+    let snap = collect(&server, "/", false, &options()).await;
+
+    let ConnectionUse::New(conn) = &snap.chain[0].connection else {
+        panic!()
+    };
+    assert!(
+        matches!(&conn.tls.as_ref().unwrap().verification, Verification::Invalid(m) if m.contains("UnknownIssuer"))
+    );
+    assert_eq!(snap.page.unwrap().body, b"page");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn http1_when_the_server_only_offers_it() {
+    let server = Server::start(TlsMode::Tls(H1_ONLY), 0, |_| async { ok("page") }).await;
+    let snap = collect(&server, "/", true, &options()).await;
+    assert_eq!(snap.chain[0].version, HttpVersion::Http1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn same_origin_redirect_reuses_the_connection() {
+    let server = Server::start(TlsMode::Tls(H1_ONLY), 0, |req| async move {
+        match req.uri().path() {
+            "/old" => redirect(301, "/new"),
+            _ => ok("new page"),
+        }
+    })
+    .await;
+    let snap = collect(&server, "/old", true, &options()).await;
+
+    assert_eq!(snap.chain.len(), 2);
+    assert!(matches!(snap.chain[1].connection, ConnectionUse::Reused));
+    assert_eq!(server.connections(), 1);
+    let report = analyze(&snap);
+    let net = report.modules.network.data.unwrap();
+    assert_eq!(net.redirects.len(), 1);
+    assert!(net.phases.unwrap().connection_reused);
+    assert!(net.final_url.unwrap().ends_with("/new"));
+    assert_eq!(report.outcome, Outcome::Complete);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn redirect_loop_becomes_a_finding() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { redirect(302, "/loop") }).await;
+    let snap = collect(&server, "/loop", true, &options()).await;
+
+    assert_eq!(snap.failure.as_ref().unwrap().kind, FailureKind::RedirectLoop);
+    assert_eq!(snap.chain.len(), 1);
+    let report = analyze(&snap);
+    assert_eq!(report.modules.network.findings[0].id, "net.redirect.loop");
+    assert_eq!(report.outcome.exit_code(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn too_many_redirects_stop_at_the_limit() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |req| async move {
+        let n: u32 = req.uri().path().trim_start_matches("/r/").parse().unwrap_or(0);
+        redirect(302, &format!("/r/{}", n + 1))
+    })
+    .await;
+    let mut opts = options();
+    opts.max_redirects = 3;
+    let snap = collect(&server, "/r/0", true, &opts).await;
+
+    assert_eq!(snap.failure.as_ref().unwrap().kind, FailureKind::TooManyRedirects);
+    assert_eq!(snap.chain.len(), 4);
+    assert_eq!(analyze(&snap).modules.network.findings[0].id, "net.redirect.too_many");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn gzip_and_brotli_are_decoded() {
+    let html = "<html><body>".to_owned() + &"olá mundo ".repeat(2000) + "</body></html>";
+    let expected = html.clone();
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, move |req| {
+        let html = html.clone();
+        async move {
+            let (encoding, body) = match req.uri().path() {
+                "/gz" => ("gzip", server::gzip(html.as_bytes())),
+                _ => ("br", server::brotli(html.as_bytes())),
+            };
+            Response::builder()
+                .header("content-encoding", encoding)
+                .body(Full::new(Bytes::from(body)))
+                .unwrap()
+        }
+    })
+    .await;
+    for path in ["/gz", "/br"] {
+        let page = collect(&server, path, true, &options()).await.page.unwrap();
+        assert_eq!(page.body, expected.as_bytes(), "{path}");
+        assert!(page.transferred < page.body.len() as u64 / 10, "{path}");
+        assert!(!page.truncated && page.decode_error.is_none(), "{path}");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn body_limit_cuts_the_page_and_marks_the_report_partial() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok(vec![b'a'; 6 << 20]) }).await;
+    let snap = collect(&server, "/", true, &options()).await;
+
+    let page = snap.page.as_ref().unwrap();
+    assert_eq!(page.body.len(), 5 << 20);
+    assert!(page.truncated);
+    assert_eq!(analyze(&snap).outcome.exit_code(), 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deadline_before_headers_means_unreachable() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async {
+        tokio::time::sleep(Duration::from_secs(3)).await;
+        ok("late")
+    })
+    .await;
+    let mut opts = options();
+    opts.timeout = Duration::from_millis(800);
+    let snap = collect(&server, "/", true, &opts).await;
+
+    assert!(snap.deadline_hit);
+    assert_eq!(snap.failure.as_ref().unwrap().kind, FailureKind::Timeout);
+    assert!(snap.duration < Duration::from_millis(1500));
+    assert_eq!(analyze(&snap).outcome.exit_code(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn deadline_during_the_body_keeps_what_arrived() {
+    let server = Server::start(TlsMode::Tls(H1_ONLY), 0, |_| async {
+        server::dripping(b"chunk ", 50, Duration::from_millis(50))
+    })
+    .await;
+    let mut opts = options();
+    opts.timeout = Duration::from_millis(700);
+    let snap = collect(&server, "/", true, &opts).await;
+
+    let page = snap.page.as_ref().unwrap();
+    assert!(snap.deadline_hit && page.truncated);
+    assert!(!page.body.is_empty() && page.body.len() < 300);
+    let report = analyze(&snap);
+    assert!(matches!(report.outcome, Outcome::Partial { .. }));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn one_retry_after_a_dropped_connection() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 1, |_| async { ok("second time") }).await;
+    let snap = collect(&server, "/", true, &options()).await;
+
+    assert!(snap.failure.is_none(), "{:?}", snap.failure);
+    assert_eq!(snap.chain[0].attempts, 2);
+    assert_eq!(snap.page.unwrap().body, b"second time");
+    assert_eq!(server.connections(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn port_80_check_sees_the_https_redirect() {
+    let https = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("secure") }).await;
+    let https_port = https.addr.port();
+    let http = Server::start(TlsMode::Plain, 0, move |_| async move {
+        redirect(301, &format!("https://localhost:{https_port}/"))
+    })
+    .await;
+
+    let mut opts = options();
+    opts.default_ports = Ports {
+        http: http.addr.port(),
+        https: https_port,
+    };
+    let collector = Collector::new(&[https.ca_der.clone().unwrap()]).unwrap();
+    let snap = collector.collect(&Target::parse("localhost").unwrap(), &opts).await;
+
+    assert!(matches!(snap.http_check, Some(HttpCheck::Response { status: 301, .. })));
+    assert_eq!(snap.page.as_ref().unwrap().body, b"secure");
+    assert_eq!(
+        analyze(&snap).modules.network.data.unwrap().https,
+        HttpsEnforcement::Redirects
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn site_without_https_falls_back_to_port_80() {
+    let http = Server::start(TlsMode::Plain, 0, |_| async { ok("plain page") }).await;
+    let closed = server::closed_port().await;
+
+    let mut opts = options();
+    opts.default_ports = Ports {
+        http: http.addr.port(),
+        https: closed,
+    };
+    let collector = Collector::new(&[]).unwrap();
+    let snap = collector.collect(&Target::parse("localhost").unwrap(), &opts).await;
+
+    assert!(snap.failure.is_none(), "{:?}", snap.failure);
+    assert_eq!(snap.https_fallback.as_ref().unwrap().kind, FailureKind::Connect);
+    assert!(snap.chain[0].url.starts_with("http://"));
+    assert_eq!(snap.page.as_ref().unwrap().body, b"plain page");
+    // The check's response was reused as the page: no second request.
+    assert_eq!(http.requests(), 1);
+    let report = analyze(&snap);
+    assert_eq!(
+        report.modules.network.data.unwrap().https,
+        HttpsEnforcement::HttpsUnavailable
+    );
+    assert_eq!(report.outcome, Outcome::Complete);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_listening_is_unreachable() {
+    let closed = server::closed_port().await;
+    let collector = Collector::new(&[]).unwrap();
+    let snap = collector
+        .collect(
+            &Target::parse(&format!("https://localhost:{closed}/")).unwrap(),
+            &options(),
+        )
+        .await;
+
+    assert!(snap.chain.is_empty());
+    assert_eq!(snap.failure.as_ref().unwrap().kind, FailureKind::Connect);
+    assert_eq!(analyze(&snap).outcome.exit_code(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn analysis_is_deterministic() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |req| async move {
+        match req.uri().path() {
+            "/" => redirect(302, "/home"),
+            _ => ok("home"),
+        }
+    })
+    .await;
+    let snap = collect(&server, "/", true, &options()).await;
+    let a = serde_json::to_string(&analyze(&snap)).unwrap();
+    let b = serde_json::to_string(&analyze(&snap)).unwrap();
+    assert_eq!(a, b);
+}

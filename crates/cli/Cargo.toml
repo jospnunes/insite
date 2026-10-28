@@ -1,0 +1,17 @@
+[package]
+name = "insite"
+description = "Full X-ray of a website from the terminal: network, TLS, DNS, stack, security, SEO and weight"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "insite"
+path = "src/main.rs"
+
+[dependencies]
+insite-core.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+clap.workspace = true

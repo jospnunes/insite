@@ -1,0 +1,35 @@
+[workspace]
+resolver = "3"
+members = ["crates/core", "crates/cli"]
+
+[workspace.package]
+version = "0.1.0-dev"
+edition = "2024"
+rust-version = "1.89"
+license = "GPL-3.0-or-later"
+
+[workspace.dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync", "io-util"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+webpki-roots = "1"
+hickory-resolver = { version = "0.26", default-features = false, features = ["tokio", "system-config"] }
+hyper = { version = "1", features = ["client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http = "1"
+http-body-util = "0.1"
+url = "2"
+idna = "1"
+flate2 = "1"
+brotli-decompressor = "6"
+x509-parser = "0.18"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+insite-core = { path = "crates/core" }
+
+[profile.release]
+panic = "unwind"
+lto = "thin"
+codegen-units = 1
+strip = true
