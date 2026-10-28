@@ -75,7 +75,11 @@ pub struct Link {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Script {
+    /// Resolved against the page URL.
     pub src: Option<String>,
+    /// The attribute as written, for checks that depend on its form
+    /// (relative, protocol-relative or absolute).
+    pub src_attr: Option<String>,
     pub kind: Option<String>,
     pub is_async: bool,
     pub defer: bool,
@@ -280,11 +284,12 @@ impl State {
                 let json_ld = kind.as_deref() == Some("application/ld+json");
                 self.facts.scripts.push(Script {
                     src: attr("src").and_then(|s| self.resolve(&s)),
+                    src_attr: attr("src"),
                     module: kind.as_deref() == Some("module"),
                     kind,
                     is_async: has("async"),
                     defer: has("defer"),
-                    integrity: has("integrity"),
+                    integrity: attr("integrity").is_some_and(|v| !v.is_empty()),
                     in_head,
                     inline: None,
                     inline_bytes: 0,

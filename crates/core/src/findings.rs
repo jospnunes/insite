@@ -67,6 +67,46 @@ catalog![
     "weight.uncompressed",
     "weight.render_blocking",
     "weight.html_large",
+    "sec.https.unavailable",
+    "sec.https.downgrade",
+    "sec.csp.missing",
+    "sec.csp.report_only",
+    "sec.csp.invalid",
+    "sec.csp.unsafe_inline",
+    "sec.csp.insecure_scheme",
+    "sec.csp.unsafe_eval",
+    "sec.csp.insecure_passive",
+    "sec.cookies.session_insecure",
+    "sec.cookies.session_httponly",
+    "sec.cookies.csrf_samesite",
+    "sec.cookies.samesite_invalid",
+    "sec.cookies.insecure",
+    "sec.cookies.session_insecure_hsts",
+    "sec.cookies.insecure_hsts",
+    "sec.redirect.missing",
+    "sec.redirect.not_https",
+    "sec.redirect.initial_http",
+    "sec.redirect.off_host",
+    "sec.referrer.unsafe",
+    "sec.referrer.invalid",
+    "sec.hsts.missing",
+    "sec.hsts.invalid",
+    "sec.hsts.short",
+    "sec.sri.missing",
+    "sec.sri.insecure",
+    "sec.xcto.missing",
+    "sec.xcto.invalid",
+    "sec.xfo.missing",
+    "sec.xfo.invalid",
+    "sec.corp.invalid",
+    "sec.coep.invalid",
+    "sec.coop.invalid",
+    "sec.mixed_content.active",
+    "sec.mixed_content.passive",
+    "sec.form.insecure",
+    "sec.version_leak",
+    "sec.permissions_policy.missing",
+    "sec.security_txt.expired",
 ];
 
 pub struct Entry<'a> {
@@ -133,6 +173,19 @@ mod tests {
     fn every_catalog_entry_parses() {
         for (id, source) in CATALOG {
             assert!(parse(source).is_some(), "catalog entry `{id}` is malformed");
+        }
+    }
+
+    #[test]
+    fn every_catalog_file_is_registered() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/findings");
+        for file in std::fs::read_dir(dir).unwrap() {
+            let name = file.unwrap().file_name().into_string().unwrap();
+            let id = name.strip_suffix(".md").unwrap_or(&name);
+            assert!(
+                CATALOG.iter().any(|(i, _)| *i == id),
+                "{name} is not in the catalog! list"
+            );
         }
     }
 

@@ -234,7 +234,7 @@ fn https_enforcement(snapshot: &Snapshot) -> HttpsEnforcement {
             .map(|u| u.scheme().to_owned())
     };
     match &snapshot.http_check {
-        Some(HttpCheck::Response { status, location }) => {
+        Some(HttpCheck::Response { status, location, .. }) => {
             let http_url = Url::parse(&snapshot.input)
                 .map(|mut u| {
                     let _ = u.set_scheme("http");

@@ -69,6 +69,18 @@ pub fn terminal(report: &Report, color: bool) -> String {
         }
     }
 
+    if let Some(sec) = &report.modules.security.data
+        && let (Some(grade), Some(score)) = (sec.grade, sec.score)
+    {
+        let painted = match grade.as_bytes()[0] {
+            b'A' => s.green(grade),
+            b'B' | b'C' => s.yellow(grade),
+            _ => s.red(grade),
+        };
+        let method = format!("{score} points · MDN HTTP Observatory method");
+        let _ = writeln!(out, "\n{}  {painted}  {}", s.bold("security"), s.dim(&method));
+    }
+
     let findings: Vec<_> = report
         .modules
         .network
@@ -77,6 +89,7 @@ pub fn terminal(report: &Report, color: bool) -> String {
         .chain(&report.modules.tls.findings)
         .chain(&report.modules.dns.findings)
         .chain(&report.modules.infra.findings)
+        .chain(&report.modules.security.findings)
         .chain(&report.modules.seo.findings)
         .chain(&report.modules.weight.findings)
         .collect();

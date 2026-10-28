@@ -284,7 +284,13 @@ pub struct Page {
 
 #[derive(Debug, Clone)]
 pub enum HttpCheck {
-    Response { status: u16, location: Option<String> },
+    Response {
+        status: u16,
+        location: Option<String>,
+        /// Where the plain HTTP request ended up when its first redirect went to
+        /// another HTTP address and was followed (at most five hops).
+        route: Vec<String>,
+    },
     Failed(FetchFailure),
 }
 

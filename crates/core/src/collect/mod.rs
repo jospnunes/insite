@@ -150,10 +150,30 @@ impl Collector {
             }
         );
 
+        // A first redirect to another plain HTTP address says nothing about where
+        // the visitor ends up; follow it, so the redirection grade is exact.
+        let mut route = Vec::new();
+        if let Some(Ok(step)) = &check_step
+            && let Some(first) = step.next.as_ref().filter(|n| n.scheme() == "http")
+        {
+            let mut next = Some(first.clone());
+            while let Some(url) = next.take().filter(|_| route.len() < 5) {
+                route.push(url.to_string());
+                match side.step(&url, REDIRECT_BODY_LIMIT).await {
+                    Ok(s) => match s.next {
+                        Some(n) if n.scheme() == "http" => next = Some(n),
+                        Some(n) => route.push(n.to_string()),
+                        None => {}
+                    },
+                    Err(_) => break,
+                }
+            }
+        }
         let http_check = check_step.as_ref().map(|step| match step {
             Ok(step) => HttpCheck::Response {
                 status: step.hop.status,
                 location: step.hop.header("location").map(str::to_owned),
+                route,
             },
             Err(failure) => HttpCheck::Failed(failure.clone()),
         });

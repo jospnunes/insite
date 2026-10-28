@@ -154,6 +154,35 @@ pub fn name_matches(name: &str, pattern: &str) -> bool {
     }
 }
 
+const HSTS_PRELOAD: &str = include_str!("../data/hsts-preload.tsv");
+
+/// Whether browsers preload HSTS for `host`: the host itself is on Chromium's
+/// list, or a parent domain is, covering its subdomains. The same rule the
+/// Observatory applies.
+pub fn hsts_preloaded(host: &str) -> bool {
+    static INDEX: OnceLock<HashMap<&'static str, bool>> = OnceLock::new();
+    let index = INDEX.get_or_init(|| {
+        HSTS_PRELOAD
+            .lines()
+            .filter(|l| !l.starts_with('#'))
+            .filter_map(|l| l.split_once('\t'))
+            .map(|(name, subdomains)| (name, subdomains == "y"))
+            .collect()
+    });
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    if index.contains_key(host.as_str()) {
+        return true;
+    }
+    let mut parent = host.as_str();
+    while let Some((_, rest)) = parent.split_once('.') {
+        if index.get(rest) == Some(&true) {
+            return true;
+        }
+        parent = rest;
+    }
+    false
+}
+
 pub fn hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
@@ -184,6 +213,19 @@ mod tests {
             (ca.kind, ca.state, ca.name),
             (CaKind::Intermediate, CaState::Trusted, "R12")
         );
+    }
+
+    #[test]
+    fn hsts_preload_covers_subdomains_only_when_listed() {
+        // bbc.co.uk is preloaded without subdomains (www has its own entry),
+        // github.com with them.
+        assert!(hsts_preloaded("bbc.co.uk"));
+        assert!(!hsts_preloaded("news.bbc.co.uk"));
+        assert!(hsts_preloaded("github.com"));
+        assert!(hsts_preloaded("API.GitHub.com."));
+        assert!(!hsts_preloaded("example.com"));
+        // Whole TLDs are on the list too.
+        assert!(hsts_preloaded("anything.dev"));
     }
 
     #[test]

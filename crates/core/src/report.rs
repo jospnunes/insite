@@ -7,6 +7,7 @@ use serde::Serialize;
 use crate::analyze::dns::Dns;
 use crate::analyze::infra::Infra;
 use crate::analyze::network::Network;
+use crate::analyze::security::Security;
 use crate::analyze::seo::Seo;
 use crate::analyze::stack::Stack;
 use crate::analyze::tls::Tls;
@@ -68,6 +69,7 @@ pub struct Modules {
     pub tls: Module<Tls>,
     pub dns: Module<Dns>,
     pub infra: Module<Infra>,
+    pub security: Module<Security>,
     pub stack: Module<Stack>,
     pub seo: Module<Seo>,
     pub weight: Module<Weight>,
