@@ -5,15 +5,16 @@
 //! still pending at that point keeps running so the report can say whether the
 //! host has IPv6 without holding up the connection.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
-use hickory_resolver::TokioResolver;
-use hickory_resolver::config::ResolveHosts;
+use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig};
+use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::{ResolverBuilder, TokioResolver};
 use tokio::task::JoinHandle;
 
-use crate::snapshot::{FailureKind, HostResolution, ResolutionSource};
+use crate::snapshot::{DnsResult, FailureKind, HostResolution, ResolutionSource};
 
 /// How long to wait for AAAA once A has answered (RFC 8305, section 3).
 const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
@@ -50,11 +51,28 @@ impl Resolved {
 
 impl Resolver {
     /// Uses the system configuration (`/etc/resolv.conf`, the Windows registry) and
-    /// the hosts file. Our own retry layer decides on retries, so hickory gets one
-    /// attempt per query.
+    /// the hosts file.
     pub fn from_system() -> Result<Self, String> {
-        let mut builder =
+        let builder =
             TokioResolver::builder_tokio().map_err(|e| format!("cannot read the system DNS configuration: {e}"))?;
+        Self::finish(builder)
+    }
+
+    /// Sends every query to one name server. Tests point it at a local server.
+    pub fn with_nameserver(addr: SocketAddr) -> Result<Self, String> {
+        let mut server = NameServerConfig::udp(addr.ip());
+        for connection in &mut server.connections {
+            connection.port = addr.port();
+        }
+        let config = ResolverConfig::from_name_servers(vec![server]);
+        Self::finish(TokioResolver::builder_with_config(
+            config,
+            TokioRuntimeProvider::default(),
+        ))
+    }
+
+    /// Our own retry layer decides on retries, so hickory gets one attempt per query.
+    fn finish(mut builder: ResolverBuilder<TokioRuntimeProvider>) -> Result<Self, String> {
         let opts = builder.options_mut();
         opts.use_hosts_file = ResolveHosts::Always;
         opts.attempts = 1;
@@ -118,6 +136,33 @@ impl Resolver {
             },
             late_ipv6: late_ipv6.map(|handle| tokio::spawn(async move { joined(handle.await).unwrap_or_default() })),
         })
+    }
+
+    /// One query, recorded as found, empty, nonexistent or failed. Names are made
+    /// fully qualified so the resolver's search list never applies.
+    pub async fn query(&self, name: &str, record_type: RecordType) -> DnsResult {
+        let fqdn = format!("{}.", name.trim_end_matches('.'));
+        match self.inner.lookup(fqdn.as_str(), record_type).await {
+            Ok(lookup) => {
+                let records: Vec<String> = lookup
+                    .answers()
+                    .iter()
+                    .filter(|r| r.record_type() == record_type)
+                    .map(|r| match &r.data {
+                        RData::TXT(txt) => txt.txt_data.iter().map(|part| String::from_utf8_lossy(part)).collect(),
+                        other => other.to_string().trim_end_matches('.').to_owned(),
+                    })
+                    .collect();
+                if records.is_empty() {
+                    DnsResult::Empty
+                } else {
+                    DnsResult::Records(records)
+                }
+            }
+            Err(e) if e.is_nx_domain() => DnsResult::NxDomain,
+            Err(e) if e.is_no_records_found() => DnsResult::Empty,
+            Err(e) => DnsResult::Failed(e.to_string()),
+        }
     }
 
     /// Our resolver found nothing. The operating system may still know the name

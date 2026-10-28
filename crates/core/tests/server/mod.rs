@@ -1,4 +1,8 @@
-//! A small local HTTP(S) server for the integration tests.
+//! Local HTTP(S) and DNS servers for the integration tests. Each test crate uses
+//! only part of this module.
+#![allow(dead_code)]
+
+pub mod dns;
 
 use std::convert::Infallible;
 use std::future::Future;

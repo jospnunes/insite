@@ -39,6 +39,18 @@ catalog![
     "tls.clock_skew",
     "tls.hop.invalid",
     "tls.handshake.incompatible",
+    "mail.spoofable",
+    "mail.spf.missing",
+    "mail.spf.multiple",
+    "mail.spf.too_many_lookups",
+    "mail.spf.broken_include",
+    "mail.spf.pass_all",
+    "mail.spf.no_all",
+    "mail.spf.ptr",
+    "mail.dmarc.missing",
+    "mail.dmarc.none",
+    "mail.dmarc.invalid",
+    "infra.challenge",
 ];
 
 pub struct Entry<'a> {

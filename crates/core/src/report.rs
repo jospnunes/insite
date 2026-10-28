@@ -4,6 +4,8 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::analyze::dns::Dns;
+use crate::analyze::infra::Infra;
 use crate::analyze::network::Network;
 use crate::analyze::tls::Tls;
 
@@ -61,6 +63,8 @@ impl Outcome {
 pub struct Modules {
     pub network: Module<Network>,
     pub tls: Module<Tls>,
+    pub dns: Module<Dns>,
+    pub infra: Module<Infra>,
 }
 
 #[derive(Debug, Clone, Serialize)]

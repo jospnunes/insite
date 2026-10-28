@@ -34,6 +34,75 @@ pub struct Snapshot {
     pub failure: Option<FetchFailure>,
     /// The global deadline expired before collection finished.
     pub deadline_hit: bool,
+    /// DNS records of the input's registrable domain and, when the chain ends on
+    /// another registrable domain, of that one too.
+    pub dns: Vec<DomainRecords>,
+    /// Owner of the final peer address, from Team Cymru's DNS service.
+    pub asn: Option<AsnLookup>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DomainRecords {
+    pub role: DomainRole,
+    pub host: String,
+    /// The domain one level below the public suffix: `exemplo.com.br`, not `com.br`.
+    pub registrable: String,
+    /// Every query made, in a fixed order, including the TXT lookups that followed
+    /// SPF includes.
+    pub answers: Vec<DnsAnswer>,
+}
+
+impl DomainRecords {
+    pub fn result(&self, name: &str, record_type: &str) -> Option<&DnsResult> {
+        self.answers
+            .iter()
+            .find(|a| a.name.eq_ignore_ascii_case(name) && a.record_type == record_type)
+            .map(|a| &a.result)
+    }
+
+    /// The records of a query, empty when it found none or was not made.
+    pub fn records(&self, name: &str, record_type: &str) -> &[String] {
+        match self.result(name, record_type) {
+            Some(DnsResult::Records(records)) => records,
+            _ => &[],
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainRole {
+    Input,
+    Final,
+}
+
+#[derive(Debug, Clone)]
+pub struct DnsAnswer {
+    /// Without the trailing dot.
+    pub name: String,
+    pub record_type: String,
+    pub result: DnsResult,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DnsResult {
+    /// Presentation format; TXT strings of one record are concatenated.
+    Records(Vec<String>),
+    /// The name exists but has no records of this type.
+    Empty,
+    NxDomain,
+    /// Timeout or server failure: absence was not established.
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct AsnLookup {
+    pub ip: IpAddr,
+    pub asn: Option<u32>,
+    pub prefix: Option<String>,
+    pub country: Option<String>,
+    /// As registered, e.g. `CLOUDFLARENET, US`.
+    pub name: Option<String>,
+    pub error: Option<String>,
 }
 
 /// What we sent, recorded because it changes what servers answer.

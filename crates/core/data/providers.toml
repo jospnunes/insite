@@ -1,0 +1,342 @@
+# Providers recognized from DNS, mail, network and HTTP evidence.
+#
+# Only unambiguous markers belong here: a wrong name in a report is worse than
+# showing the raw value (the NS, the MX, the AS name), which the report does
+# whenever nothing matches.
+#
+# Name patterns match the end of a host name on a label boundary
+# ("cloudflare.com" matches "ns1.cloudflare.com", not "notcloudflare.com").
+# A pattern starting with "~" matches anywhere ("~awsdns-").
+
+[[dns]]
+name = "Cloudflare"
+ns = ["ns.cloudflare.com"]
+
+[[dns]]
+name = "Amazon Route 53"
+ns = ["~awsdns-"]
+
+[[dns]]
+name = "Google Cloud DNS"
+ns = ["googledomains.com"]
+
+[[dns]]
+name = "Azure DNS"
+ns = ["azure-dns.com", "azure-dns.net", "azure-dns.org", "azure-dns.info"]
+
+[[dns]]
+name = "DigitalOcean"
+ns = ["digitalocean.com"]
+
+[[dns]]
+name = "GoDaddy"
+ns = ["domaincontrol.com"]
+
+[[dns]]
+name = "Registro.br"
+ns = ["auto.dns.br"]
+
+[[dns]]
+name = "Locaweb"
+ns = ["locaweb.com.br"]
+
+[[dns]]
+name = "Hostinger"
+ns = ["dns-parking.com"]
+
+[[dns]]
+name = "Vercel"
+ns = ["vercel-dns.com"]
+
+[[dns]]
+name = "NS1"
+ns = ["nsone.net"]
+
+[[dns]]
+name = "Namecheap"
+ns = ["registrar-servers.com"]
+
+[[dns]]
+name = "Akamai"
+ns = ["akam.net"]
+
+[[dns]]
+name = "Wix"
+ns = ["wixdns.net"]
+
+[[dns]]
+name = "Hetzner"
+ns = ["ns.hetzner.com", "ns.hetzner.de"]
+
+[[dns]]
+name = "OVHcloud"
+ns = ["ovh.net"]
+
+[[dns]]
+name = "Gandi"
+ns = ["gandi.net"]
+
+[[dns]]
+name = "DNSimple"
+ns = ["dnsimple.com"]
+
+[[dns]]
+name = "UltraDNS"
+ns = ["ultradns.com", "ultradns.net", "ultradns.org", "ultradns.biz", "ultradns.info"]
+
+[[mail]]
+name = "Google Workspace"
+mx = ["google.com", "googlemail.com"]
+
+[[mail]]
+name = "Microsoft 365"
+mx = ["mail.protection.outlook.com"]
+
+[[mail]]
+name = "Zoho Mail"
+mx = ["zoho.com", "zoho.eu", "zoho.in", "zohomail.com"]
+
+[[mail]]
+name = "Proton Mail"
+mx = ["protonmail.ch"]
+
+[[mail]]
+name = "Fastmail"
+mx = ["messagingengine.com"]
+
+[[mail]]
+name = "iCloud Mail"
+mx = ["mail.icloud.com"]
+
+[[mail]]
+name = "Yahoo Mail"
+mx = ["yahoodns.net"]
+
+[[mail]]
+name = "Locaweb"
+mx = ["locaweb.com.br"]
+
+[[mail]]
+name = "Hostinger"
+mx = ["hostinger.com"]
+
+[[mail]]
+name = "Titan"
+mx = ["titan.email"]
+
+[[mail]]
+name = "GoDaddy"
+mx = ["secureserver.net"]
+
+[[mail]]
+name = "Cloudflare Email Routing"
+mx = ["mx.cloudflare.net"]
+
+[[mail]]
+name = "Amazon SES"
+mx = ["~inbound-smtp."]
+
+[[mail]]
+name = "Mimecast"
+mx = ["mimecast.com"]
+
+[[mail]]
+name = "Proofpoint"
+mx = ["pphosted.com"]
+
+[[mail]]
+name = "Barracuda"
+mx = ["barracudanetworks.com"]
+
+[[mail]]
+name = "Yandex 360"
+mx = ["yandex.net", "yandex.ru"]
+
+[[mail]]
+name = "Mailgun"
+mx = ["mailgun.org"]
+
+[[hosting]]
+name = "Amazon Web Services"
+asn = [16509, 14618]
+
+[[hosting]]
+name = "Google Cloud"
+asn = [15169, 396982]
+
+[[hosting]]
+name = "Microsoft Azure"
+asn = [8075]
+
+[[hosting]]
+name = "Oracle Cloud"
+asn = [31898]
+
+[[hosting]]
+name = "Alibaba Cloud"
+asn = [45102]
+
+[[hosting]]
+name = "Hetzner"
+asn = [24940, 213230]
+
+[[hosting]]
+name = "OVHcloud"
+asn = [16276]
+
+[[hosting]]
+name = "DigitalOcean"
+asn = [14061]
+
+[[hosting]]
+name = "Akamai Cloud (Linode)"
+asn = [63949]
+
+[[hosting]]
+name = "Vultr"
+asn = [20473]
+
+[[hosting]]
+name = "Scaleway"
+asn = [12876]
+
+[[hosting]]
+name = "IONOS"
+asn = [8560]
+
+[[hosting]]
+name = "Contabo"
+asn = [51167]
+
+[[hosting]]
+name = "Cloudflare"
+asn = [13335]
+
+[[hosting]]
+name = "Fastly"
+asn = [54113]
+
+[[hosting]]
+name = "Akamai"
+asn = [20940, 16625]
+
+[[hosting]]
+name = "Locaweb"
+asn = [27715]
+
+[[hosting]]
+name = "Hostinger"
+asn = [47583]
+
+[[hosting]]
+name = "GoDaddy"
+asn = [26496]
+
+[[hosting]]
+name = "Newfold Digital (Bluehost, HostGator)"
+asn = [46606]
+
+[[hosting]]
+name = "Wix"
+asn = [58182]
+
+# A CDN or edge proxy is reported when any of its markers is present.
+# headers: a response header that exists; server: substring of `Server`;
+# cname: suffix of a CNAME target; asn: the final peer's AS.
+
+[[cdn]]
+name = "Cloudflare"
+headers = ["cf-ray"]
+server = ["cloudflare"]
+cname = ["cdn.cloudflare.net"]
+asn = [13335]
+
+[[cdn]]
+name = "Akamai"
+headers = ["akamai-grn", "x-akamai-transformed"]
+server = ["akamaighost", "akamainetstorage"]
+cname = ["edgekey.net", "akamaiedge.net", "edgesuite.net", "akamaized.net"]
+asn = [20940, 16625]
+
+[[cdn]]
+name = "Fastly"
+headers = ["x-fastly-request-id", "fastly-debug-digest"]
+cname = ["fastly.net", "fastlylb.net"]
+asn = [54113]
+
+[[cdn]]
+name = "Amazon CloudFront"
+headers = ["x-amz-cf-id", "x-amz-cf-pop"]
+cname = ["cloudfront.net"]
+
+[[cdn]]
+name = "Azure Front Door"
+headers = ["x-azure-ref"]
+cname = ["azurefd.net", "azureedge.net"]
+
+[[cdn]]
+name = "Vercel"
+headers = ["x-vercel-id"]
+server = ["vercel"]
+
+[[cdn]]
+name = "Netlify"
+headers = ["x-nf-request-id"]
+server = ["netlify"]
+
+[[cdn]]
+name = "Bunny CDN"
+server = ["bunnycdn"]
+cname = ["b-cdn.net"]
+
+[[cdn]]
+name = "KeyCDN"
+server = ["keycdn-engine"]
+
+[[cdn]]
+name = "Sucuri"
+headers = ["x-sucuri-id"]
+server = ["sucuri"]
+
+[[cdn]]
+name = "Imperva"
+headers = ["x-iinfo"]
+cname = ["incapdns.net", "impervadns.net"]
+
+# A challenge or block page replaces the content. Each signal is a set of
+# conditions that must all hold: status (any of), header (present, and
+# containing value when given), body (substring of the first 64 KB).
+
+[[challenge]]
+name = "Cloudflare"
+signals = [
+  { header = "cf-mitigated", value = "challenge" },
+  { status = [403, 503], header = "server", value = "cloudflare", body = "/cdn-cgi/challenge-platform/" },
+]
+
+[[challenge]]
+name = "Vercel"
+signals = [{ header = "x-vercel-mitigated", value = "challenge" }]
+
+[[challenge]]
+name = "AWS WAF"
+signals = [
+  { header = "x-amzn-waf-action", value = "challenge" },
+  { header = "x-amzn-waf-action", value = "captcha" },
+]
+
+[[challenge]]
+name = "Akamai"
+signals = [{ status = [403], header = "server", value = "akamaighost", body = "Reference&#32;&#35;" }]
+
+[[challenge]]
+name = "Imperva"
+signals = [{ body = "_Incapsula_Resource" }]
+
+[[challenge]]
+name = "Sucuri"
+signals = [{ status = [403], body = "Sucuri WebSite Firewall" }]
+
+[[challenge]]
+name = "DataDome"
+signals = [{ status = [403], header = "x-datadome", body = "captcha-delivery.com" }]

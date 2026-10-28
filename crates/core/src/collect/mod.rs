@@ -1,8 +1,10 @@
 //! Collection: everything that touches the network. Produces a `Snapshot`.
 
+pub mod asn;
 pub mod connect;
 pub mod dns;
 pub mod http;
+pub mod records;
 pub mod target;
 pub mod tls;
 
@@ -14,8 +16,8 @@ use std::time::{Duration, Instant, SystemTime};
 use url::{Host, Url};
 
 use crate::snapshot::{
-    ConnectionInfo, ConnectionUse, FailureKind, FetchFailure, Hop, HttpCheck, HttpVersion, Page, RequestProfile,
-    SNAPSHOT_VERSION, Snapshot,
+    ConnectionInfo, ConnectionUse, DomainRole, FailureKind, FetchFailure, Hop, HttpCheck, HttpVersion, Page,
+    RequestProfile, SNAPSHOT_VERSION, Snapshot,
 };
 use dns::{Resolved, Resolver};
 use http::Sender;
@@ -69,10 +71,18 @@ pub struct Collector {
 impl Collector {
     /// `extra_roots` are DER certificates trusted on top of the embedded roots.
     pub fn new(extra_roots: &[Vec<u8>]) -> Result<Self, String> {
+        Self::with_resolver(Resolver::from_system()?, extra_roots)
+    }
+
+    pub fn with_resolver(resolver: Resolver, extra_roots: &[Vec<u8>]) -> Result<Self, String> {
         Ok(Collector {
-            resolver: Resolver::from_system()?,
+            resolver,
             tls: Tls::new(extra_roots)?,
         })
+    }
+
+    pub fn resolver(&self) -> &Resolver {
+        &self.resolver
     }
 
     pub async fn collect(&self, target: &Target, opts: &Options) -> Snapshot {
@@ -90,13 +100,26 @@ impl Collector {
 
         let mut chain = Vec::new();
         let mut visited = HashSet::new();
-        let (main_result, check_step) =
-            tokio::join!(main.follow(target.url.clone(), &mut chain, &mut visited), async {
+        // DNS records of the input domain start at t = 0, alongside the page.
+        let input_host = match target.url.host() {
+            Some(Host::Domain(domain)) => Some(domain.to_owned()),
+            _ => None,
+        };
+        let (main_result, check_step, input_records) = tokio::join!(
+            main.follow(target.url.clone(), &mut chain, &mut visited),
+            async {
                 match &check_url {
                     Some(url) => Some(side.step(url).await),
                     None => None,
                 }
-            });
+            },
+            async {
+                match &input_host {
+                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Input, deadline).await),
+                    None => None,
+                }
+            }
+        );
 
         let http_check = check_step.as_ref().map(|step| match step {
             Ok(step) => HttpCheck::Response {
@@ -141,9 +164,42 @@ impl Collector {
             }
         }
 
-        let deadline_hit = main.deadline_hit || side.deadline_hit;
         main.settle_into(&mut chain).await;
         side.settle_into(&mut chain).await;
+
+        // Once the chain is known: the final domain's records, when it is another
+        // registrable domain, and the owner of the final peer address.
+        let final_url = chain.last().and_then(|hop| Url::parse(&hop.url).ok());
+        let final_host = final_url.as_ref().and_then(|u| match u.host() {
+            Some(Host::Domain(d)) => Some(d.to_owned()),
+            _ => None,
+        });
+        let other_domain = final_host.filter(|f| {
+            input_host
+                .as_deref()
+                .is_none_or(|i| records::registrable(i) != records::registrable(f))
+        });
+        let peer = chain
+            .last()
+            .and_then(|hop| crate::analyze::network::opener(&chain, hop))
+            .map(|c| c.peer.ip());
+        let (final_records, asn) = tokio::join!(
+            async {
+                match &other_domain {
+                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Final, deadline).await),
+                    None => None,
+                }
+            },
+            async {
+                match peer {
+                    Some(ip) if !ip.is_loopback() => tokio::time::timeout_at(deadline, asn::lookup(&self.resolver, ip))
+                        .await
+                        .ok(),
+                    _ => None,
+                }
+            }
+        );
+        let deadline_hit = main.deadline_hit || side.deadline_hit || tokio::time::Instant::now() >= deadline;
 
         Snapshot {
             snapshot_version: SNAPSHOT_VERSION,
@@ -158,6 +214,8 @@ impl Collector {
             https_fallback,
             failure,
             deadline_hit,
+            dns: input_records.into_iter().chain(final_records).collect(),
+            asn,
         }
     }
 }

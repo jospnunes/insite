@@ -3,6 +3,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use serde::Deserialize;
+
 /// A CA certificate disclosed to the root programs, from the CCADB.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Ca {
@@ -74,6 +76,84 @@ fn parse(source: &'static str) -> HashMap<Vec<u8>, Ca> {
     index
 }
 
+const PROVIDERS: &str = include_str!("../data/providers.toml");
+
+/// Providers recognized from DNS, mail, network and HTTP evidence.
+#[derive(Debug, Deserialize)]
+pub struct Providers {
+    pub dns: Vec<NamedPatterns<NsField>>,
+    pub mail: Vec<NamedPatterns<MxField>>,
+    pub hosting: Vec<Hosting>,
+    pub cdn: Vec<Cdn>,
+    pub challenge: Vec<Challenge>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NamedPatterns<F> {
+    pub name: String,
+    #[serde(flatten)]
+    pub patterns: F,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NsField {
+    pub ns: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MxField {
+    pub mx: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Hosting {
+    pub name: String,
+    pub asn: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Cdn {
+    pub name: String,
+    #[serde(default)]
+    pub headers: Vec<String>,
+    #[serde(default)]
+    pub server: Vec<String>,
+    #[serde(default)]
+    pub cname: Vec<String>,
+    #[serde(default)]
+    pub asn: Vec<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Challenge {
+    pub name: String,
+    pub signals: Vec<Signal>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Signal {
+    #[serde(default)]
+    pub status: Vec<u16>,
+    pub header: Option<String>,
+    pub value: Option<String>,
+    pub body: Option<String>,
+}
+
+pub fn providers() -> &'static Providers {
+    static PARSED: OnceLock<Providers> = OnceLock::new();
+    PARSED.get_or_init(|| toml::from_str(PROVIDERS).expect("embedded providers.toml is valid"))
+}
+
+/// Whether `name` matches a provider pattern: a suffix on a label boundary, or
+/// anywhere when the pattern starts with `~`.
+pub fn name_matches(name: &str, pattern: &str) -> bool {
+    let name = name.trim_end_matches('.').to_ascii_lowercase();
+    match pattern.strip_prefix('~') {
+        Some(fragment) => name.contains(fragment),
+        None => name == pattern || name.ends_with(&format!(".{pattern}")),
+    }
+}
+
 pub fn hex(text: &str) -> Option<Vec<u8>> {
     if !text.len().is_multiple_of(2) {
         return None;
@@ -87,6 +167,15 @@ pub fn hex(text: &str) -> Option<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn providers_parse_and_match_on_label_boundaries() {
+        let p = providers();
+        assert!(p.dns.len() > 10 && p.mail.len() > 10 && !p.cdn.is_empty() && !p.challenge.is_empty());
+        assert!(name_matches("ns1.cloudflare.com.", "cloudflare.com"));
+        assert!(!name_matches("notcloudflare.com", "cloudflare.com"));
+        assert!(name_matches("ns-12.awsdns-01.org", "~awsdns-"));
+    }
 
     #[test]
     fn finds_lets_encrypt_r12() {

@@ -1,6 +1,9 @@
 //! Analysis: pure functions from `Snapshot` to `Report`. No network, no clock.
 
+pub mod dns;
+pub mod infra;
 pub mod network;
+pub mod spf;
 pub mod tls;
 
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -15,7 +18,17 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
     let network = network::analyze(snapshot);
     let final_url = network.data.as_ref().and_then(|n| n.final_url.clone());
     let tls = tls::analyze(snapshot);
-    let outcome = outcome(snapshot, &[("network", network.status), ("tls", tls.status)]);
+    let dns = dns::analyze(snapshot);
+    let infra = infra::analyze(snapshot);
+    let outcome = outcome(
+        snapshot,
+        &[
+            ("network", network.status),
+            ("tls", tls.status),
+            ("dns", dns.status),
+            ("infra", infra.status),
+        ],
+    );
 
     Report {
         schema_version: SCHEMA_VERSION,
@@ -31,7 +44,12 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
         started_at: rfc3339(snapshot.collected_at),
         duration_ms: network::ms(snapshot.duration),
         outcome,
-        modules: Modules { network, tls },
+        modules: Modules {
+            network,
+            tls,
+            dns,
+            infra,
+        },
     }
 }
 
@@ -60,6 +78,9 @@ fn outcome(snapshot: &Snapshot, modules: &[(&str, Status)]) -> Outcome {
             "the page answered {}, so it does not represent the site",
             last.status
         ));
+    }
+    if let Some(c) = infra::challenge(snapshot) {
+        reasons.push(format!("{} answered with a bot challenge, not the page", c.name));
     }
     if snapshot.page.as_ref().is_some_and(|p| p.truncated) {
         reasons.push("the page body was cut".to_owned());
