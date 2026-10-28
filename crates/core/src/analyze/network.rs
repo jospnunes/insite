@@ -21,7 +21,10 @@ pub struct Network {
     pub redirects_ms: f64,
     /// Phases of the final hop only.
     pub phases: Option<Phases>,
+    /// The address connected to; absent behind a proxy, where it would be the proxy's.
     pub peer: Option<String>,
+    /// `host:port` of the proxy that carried the final connection.
+    pub proxy: Option<String>,
     /// Whether the final host has AAAA records; absent for IP literals.
     pub ipv6: Option<bool>,
     /// Absent when the DNS phase could not be timed (system resolver, IP literal, cache).
@@ -122,7 +125,10 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Network> {
         redirects,
         redirects_ms,
         phases: final_hop.map(phases),
-        peer: connection.map(|c| c.peer.ip().to_string()),
+        peer: connection
+            .filter(|c| c.proxy.is_none())
+            .map(|c| c.peer.ip().to_string()),
+        proxy: connection.and_then(|c| c.proxy.clone()),
         ipv6: connection.and_then(|c| c.resolution.as_ref()).map(|r| r.has_ipv6),
         dns_source: connection.and_then(|c| c.resolution.as_ref()).map(|r| match r.source {
             ResolutionSource::Resolver => "resolver",

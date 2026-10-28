@@ -6,8 +6,11 @@ use std::time::Duration;
 
 use clap::Parser;
 use insite_core::analyze;
+use insite_core::collect::dns::Resolver;
 use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
+use insite_core::collect::proxy::ProxyConfig;
 use insite_core::collect::target::Target;
+use insite_core::collect::tls::Tls;
 use insite_core::collect::{Collector, Options};
 use insite_core::snapshot::RequestProfile;
 
@@ -38,6 +41,11 @@ struct Args {
     /// Accept-Language to send (default: from the system locale)
     #[arg(long, value_name = "TAG")]
     lang: Option<String>,
+
+    /// Validate certificates against the system trust store instead of the
+    /// embedded Mozilla roots (needed behind corporate TLS inspection)
+    #[arg(long)]
+    native_roots: bool,
 }
 
 fn main() -> ExitCode {
@@ -56,6 +64,10 @@ fn main() -> ExitCode {
         accept_encoding: ACCEPT_ENCODING_VALUE.to_owned(),
     });
     opts.timeout = Duration::from_secs_f64(args.timeout);
+    opts.proxy = match proxy_from_env() {
+        Ok(p) => p,
+        Err(e) => return usage_error(&e),
+    };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(4)
@@ -63,7 +75,7 @@ fn main() -> ExitCode {
         .build()
         .expect("tokio runtime");
     let report = runtime.block_on(async {
-        let collector = Collector::new(&[])?;
+        let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], args.native_roots)?);
         let snapshot = collector.collect(&target, &opts).await;
         Ok::<_, String>(analyze::analyze(&snapshot))
     });
@@ -95,6 +107,20 @@ fn main() -> ExitCode {
 fn usage_error(message: &str) -> ExitCode {
     eprintln!("insite: {message}");
     ExitCode::from(2)
+}
+
+/// curl's conventions: `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, upper or lower case.
+fn proxy_from_env() -> Result<ProxyConfig, String> {
+    let var = |name: &str| {
+        std::env::var(name)
+            .or_else(|_| std::env::var(name.to_ascii_lowercase()))
+            .ok()
+    };
+    ProxyConfig::from_values(
+        var("HTTPS_PROXY").as_deref(),
+        var("HTTP_PROXY").as_deref(),
+        var("NO_PROXY").as_deref(),
+    )
 }
 
 fn user_agent(profile: &str) -> String {

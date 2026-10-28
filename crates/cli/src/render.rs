@@ -126,6 +126,9 @@ fn headline(out: &mut String, s: &Style, host: &str, net: &Network) {
     if let Some(peer) = &net.peer {
         facts.push(peer.clone());
     }
+    if let Some(proxy) = &net.proxy {
+        facts.push(format!("via proxy {proxy}"));
+    }
     if let Some(v6) = net.ipv6 {
         facts.push(format!("IPv6 {}", if v6 { "yes" } else { "no" }));
     }

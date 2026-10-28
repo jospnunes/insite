@@ -35,11 +35,25 @@ pub struct TlsError {
 }
 
 impl Tls {
-    /// Trusts the embedded Mozilla roots plus `extra_roots` (DER), which tests use.
-    pub fn new(extra_roots: &[Vec<u8>]) -> Result<Self, String> {
+    /// Trusts the embedded Mozilla roots, or the operating system's store when
+    /// `native` (needed behind corporate TLS inspection), plus `extra_roots` (DER),
+    /// which tests use.
+    pub fn new(extra_roots: &[Vec<u8>], native: bool) -> Result<Self, String> {
         let provider = Arc::new(rustls::crypto::ring::default_provider());
         let mut roots = RootCertStore::empty();
-        roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        if native {
+            let found = rustls_native_certs::load_native_certs();
+            if found.certs.is_empty() {
+                let errors: Vec<String> = found.errors.iter().map(ToString::to_string).collect();
+                return Err(format!(
+                    "no certificates in the system trust store: {}",
+                    errors.join("; ")
+                ));
+            }
+            roots.add_parsable_certificates(found.certs);
+        } else {
+            roots.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+        }
         for der in extra_roots {
             roots
                 .add(CertificateDer::from(der.clone()))

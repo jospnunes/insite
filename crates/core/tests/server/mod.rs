@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 pub mod dns;
+pub mod proxy;
 
 use std::convert::Infallible;
 use std::future::Future;

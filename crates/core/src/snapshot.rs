@@ -39,6 +39,31 @@ pub struct Snapshot {
     pub dns: Vec<DomainRecords>,
     /// Owner of the final peer address, from Team Cymru's DNS service.
     pub asn: Option<AsnLookup>,
+    /// robots.txt, security.txt and the sitemap of the final origin.
+    pub auxiliary: Auxiliary,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct Auxiliary {
+    pub robots: Option<AuxFile>,
+    pub security_txt: Option<AuxFile>,
+    pub sitemap: Option<AuxFile>,
+}
+
+/// A file fetched as is. Whether it is what it claims to be (many servers answer
+/// 200 with an HTML page for any path) is decided by the analysis.
+#[derive(Debug, Clone)]
+pub struct AuxFile {
+    pub requested: String,
+    /// After redirects.
+    pub url: String,
+    pub status: Option<u16>,
+    pub content_type: Option<String>,
+    /// Decoded, at most the file's limit.
+    pub body: Vec<u8>,
+    pub truncated: bool,
+    pub redirects: u8,
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +193,9 @@ pub struct ConnectionInfo {
     pub connect_at: Duration,
     pub tcp: Duration,
     pub tls: Option<TlsInfo>,
+    /// `host:port` of the proxy that tunneled this connection. Then `peer` is the
+    /// proxy, `tcp` measures the path to it and there is no DNS phase.
+    pub proxy: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -280,4 +308,6 @@ pub enum FailureKind {
     RedirectLoop,
     TooManyRedirects,
     Timeout,
+    /// The proxy refused or broke the tunnel; says nothing about the site.
+    Proxy,
 }

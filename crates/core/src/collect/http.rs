@@ -43,6 +43,14 @@ impl Sender {
         })
     }
 
+    /// Another handle to the same connection: HTTP/2 multiplexes, HTTP/1.1 cannot.
+    pub fn try_clone(&self) -> Option<Self> {
+        match self {
+            Sender::Http1(_) => None,
+            Sender::Http2(sender) => Some(Sender::Http2(sender.clone())),
+        }
+    }
+
     pub fn is_closed(&self) -> bool {
         match self {
             Sender::Http1(sender) => sender.is_closed(),

@@ -11,6 +11,7 @@ use hyper::body::Bytes;
 use insite_core::analyze::analyze;
 use insite_core::analyze::network::HttpsEnforcement;
 use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
+use insite_core::collect::proxy::ProxyConfig;
 use insite_core::collect::target::Target;
 use insite_core::collect::{Collector, Options, Ports};
 use insite_core::report::Outcome;
@@ -68,9 +69,10 @@ async fn http2_with_trusted_chain() {
     assert_eq!(tls.sni.as_deref(), Some("localhost"));
     assert!(conn.resolution.as_ref().unwrap().duration.is_some());
     assert_eq!(snap.page.unwrap().body, b"insite-test/1|pt-BR,pt;q=0.9,en;q=0.8");
-    // An explicit port disables the port 80 check: one connection, one request.
+    // An explicit port disables the port 80 check: one connection, carrying the
+    // page plus robots.txt, security.txt and the sitemap.
     assert!(snap.http_check.is_none());
-    assert_eq!((server.connections(), server.requests()), (1, 1));
+    assert_eq!((server.connections(), server.requests()), (1, 4));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -114,7 +116,9 @@ async fn same_origin_redirect_reuses_the_connection() {
 
     assert_eq!(snap.chain.len(), 2);
     assert!(matches!(snap.chain[1].connection, ConnectionUse::Reused));
-    assert_eq!(server.connections(), 1);
+    // The page's connection served both hops; the second one is the auxiliary
+    // files' connection, which HTTP/1.1 cannot multiplex.
+    assert_eq!(server.connections(), 2);
     let report = analyze(&snap);
     let net = report.modules.network.data.unwrap();
     assert_eq!(net.redirects.len(), 1);
@@ -275,8 +279,9 @@ async fn site_without_https_falls_back_to_port_80() {
     assert_eq!(snap.https_fallback.as_ref().unwrap().kind, FailureKind::Connect);
     assert!(snap.chain[0].url.starts_with("http://"));
     assert_eq!(snap.page.as_ref().unwrap().body, b"plain page");
-    // The check's response was reused as the page: no second request.
-    assert_eq!(http.requests(), 1);
+    // The check's response was reused as the page: one request for it, plus
+    // robots.txt, security.txt and the sitemap.
+    assert_eq!(http.requests(), 4);
     let report = analyze(&snap);
     assert_eq!(
         report.modules.network.data.unwrap().https,
@@ -314,4 +319,103 @@ async fn analysis_is_deterministic() {
     let a = serde_json::to_string(&analyze(&snap)).unwrap();
     let b = serde_json::to_string(&analyze(&snap)).unwrap();
     assert_eq!(a, b);
+}
+
+fn site(req: http::Request<hyper::body::Incoming>) -> Response<Full<Bytes>> {
+    match req.uri().path() {
+        "/robots.txt" => ok("User-agent: *\nDisallow: /admin\nSitemap: /sm.xml\n"),
+        "/sm.xml" => ok("<?xml version=\"1.0\"?><urlset><url><loc>https://x/</loc></url></urlset>"),
+        "/.well-known/security.txt" => ok("Contact: mailto:security@example.com\n"),
+        "/" => ok("<html>home</html>"),
+        _ => Response::builder()
+            .status(404)
+            .body(Full::new(Bytes::from_static(b"not found")))
+            .unwrap(),
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auxiliary_files_ride_the_http2_connection() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |req| async move { site(req) }).await;
+    let snap = collect(&server, "/", true, &options()).await;
+    let aux = &snap.auxiliary;
+
+    let robots = aux.robots.as_ref().unwrap();
+    assert_eq!(robots.status, Some(200));
+    assert!(String::from_utf8_lossy(&robots.body).contains("Sitemap: /sm.xml"));
+    assert_eq!(aux.security_txt.as_ref().unwrap().status, Some(200));
+    let sitemap = aux.sitemap.as_ref().unwrap();
+    assert!(sitemap.url.ends_with("/sm.xml"), "{}", sitemap.url);
+    assert_eq!(sitemap.status, Some(200));
+    // Page, robots.txt, security.txt and sitemap over a single connection.
+    assert_eq!((server.connections(), server.requests()), (1, 4));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn auxiliary_files_use_one_extra_http1_connection() {
+    let server = Server::start(TlsMode::Tls(H1_ONLY), 0, |req| async move { site(req) }).await;
+    let snap = collect(&server, "/", true, &options()).await;
+
+    assert_eq!(snap.auxiliary.sitemap.as_ref().unwrap().status, Some(200));
+    assert_eq!((server.connections(), server.requests()), (2, 4));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sitemap_defaults_to_sitemap_xml() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |req| async move {
+        match req.uri().path() {
+            "/" => ok("home"),
+            _ => Response::builder().status(404).body(Full::new(Bytes::new())).unwrap(),
+        }
+    })
+    .await;
+    let snap = collect(&server, "/", true, &options()).await;
+    let sitemap = snap.auxiliary.sitemap.unwrap();
+    assert!(sitemap.requested.ends_with("/sitemap.xml"));
+    assert_eq!(sitemap.status, Some(404));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn pages_go_through_an_https_proxy() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("via proxy") }).await;
+    let proxy = server::proxy::Proxy::start(false).await;
+    let mut opts = options();
+    opts.proxy = ProxyConfig::from_values(Some(&proxy.url()), None, None).unwrap();
+    let snap = collect(&server, "/", true, &opts).await;
+
+    assert!(snap.failure.is_none(), "{:?}", snap.failure);
+    assert_eq!(snap.page.as_ref().unwrap().body, b"via proxy");
+    let ConnectionUse::New(conn) = &snap.chain[0].connection else {
+        panic!()
+    };
+    assert_eq!(conn.proxy.as_deref(), Some(proxy.addr.to_string().as_str()));
+    assert!(conn.resolution.is_none(), "the proxy resolves the name, not us");
+    assert_eq!(conn.tls.as_ref().unwrap().verification, Verification::Valid);
+    assert!(proxy.tunnels() >= 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refusing_proxy_is_not_blamed_on_the_site() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("page") }).await;
+    let proxy = server::proxy::Proxy::start(true).await;
+    let mut opts = options();
+    opts.proxy = ProxyConfig::from_values(Some(&proxy.url()), None, None).unwrap();
+    let snap = collect(&server, "/", true, &opts).await;
+
+    let failure = snap.failure.unwrap();
+    assert_eq!(failure.kind, FailureKind::Proxy);
+    assert!(failure.message.contains("403"), "{}", failure.message);
+    assert_eq!(server.connections(), 0);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn no_proxy_hosts_go_direct() {
+    let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("direct") }).await;
+    let proxy = server::proxy::Proxy::start(false).await;
+    let mut opts = options();
+    opts.proxy = ProxyConfig::from_values(Some(&proxy.url()), None, Some("localhost")).unwrap();
+    let snap = collect(&server, "/", true, &opts).await;
+
+    assert_eq!(snap.page.unwrap().body, b"direct");
+    assert_eq!(proxy.tunnels(), 0);
 }

@@ -149,5 +149,6 @@ fn snapshot() -> insite_core::snapshot::Snapshot {
         deadline_hit: false,
         dns: Vec::new(),
         asn: None,
+        auxiliary: Default::default(),
     }
 }

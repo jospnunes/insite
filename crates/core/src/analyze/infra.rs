@@ -95,7 +95,12 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Infra> {
     }
 
     let data = Infra {
-        ip: opener(&snapshot.chain, last).map(|c| c.peer.ip().to_string()),
+        // Behind a proxy the connected peer is the proxy; the AS lookup used the
+        // address our DNS returned for the site instead.
+        ip: match opener(&snapshot.chain, last) {
+            Some(c) if c.proxy.is_none() => Some(c.peer.ip().to_string()),
+            _ => asn.map(|a| a.ip.to_string()),
+        },
         asn: as_number,
         as_name: asn.and_then(|a| a.name.clone()),
         prefix: asn.and_then(|a| a.prefix.clone()),
@@ -219,6 +224,7 @@ pub(crate) mod tests {
             deadline_hit: false,
             dns: Vec::new(),
             asn: None,
+            auxiliary: Default::default(),
         }
     }
 
