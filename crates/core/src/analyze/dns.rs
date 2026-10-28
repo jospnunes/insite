@@ -39,6 +39,21 @@ pub struct DomainReport {
     pub bimi: bool,
     /// Queries that failed, so absence was not established for them.
     pub failed_queries: Vec<String>,
+    /// False when the resolver looks like it filters queries: then a missing
+    /// record says nothing, and only the records that came back count.
+    pub absences_reliable: bool,
+}
+
+impl DomainReport {
+    /// Whether "no `record_type` at `name`" was established: the query was made,
+    /// answered, and the resolver is trusted for absences.
+    pub fn absence_known(&self, name: &str, record_type: &str) -> bool {
+        self.absences_reliable
+            && !self
+                .failed_queries
+                .iter()
+                .any(|q| *q == format!("{name} {record_type}"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -81,7 +96,9 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Dns> {
                  filtering queries, so records it did not return are not reported as missing",
                 records.registrable
             ));
-            domains.push(domain(records, &mut Vec::new()));
+            let mut report = domain(records, &mut Vec::new());
+            report.absences_reliable = false;
+            domains.push(report);
         } else {
             domains.push(domain(records, &mut findings));
         }
@@ -210,6 +227,7 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
         tls_rpt: txt_has(&format!("_smtp._tls.{reg}"), "v=tlsrptv1"),
         bimi: txt_has(&format!("default._bimi.{reg}"), "v=bimi1"),
         failed_queries,
+        absences_reliable: true,
     }
 }
 

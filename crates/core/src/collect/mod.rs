@@ -19,6 +19,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 use url::{Host, Url};
 
+use crate::report::{ModuleName, Selection};
 use crate::snapshot::{
     AuxFile, Auxiliary, ConnectionInfo, ConnectionUse, DomainRecords, DomainRole, FailureKind, FetchFailure, Hop,
     HttpCheck, HttpVersion, Page, RequestProfile, SNAPSHOT_VERSION, Snapshot,
@@ -65,6 +66,20 @@ pub struct Fetch {
     pub security_txt: bool,
 }
 
+impl Fetch {
+    /// Only what the chosen modules read; the page itself is always fetched.
+    pub fn for_modules(selection: Selection) -> Self {
+        let has = |m| selection.contains(m);
+        Fetch {
+            http_check: has(ModuleName::Security) || has(ModuleName::Network),
+            dns_records: has(ModuleName::Dns) || has(ModuleName::Infra) || has(ModuleName::Stack),
+            asn: has(ModuleName::Infra),
+            robots_and_sitemap: has(ModuleName::Seo),
+            security_txt: has(ModuleName::Security),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Ports {
     pub http: u16,
@@ -80,13 +95,7 @@ impl Options {
             max_redirects: 10,
             default_ports: Ports { http: 80, https: 443 },
             proxy: ProxyConfig::default(),
-            fetch: Fetch {
-                http_check: true,
-                dns_records: true,
-                asn: true,
-                robots_and_sitemap: true,
-                security_txt: true,
-            },
+            fetch: Fetch::for_modules(Selection::all()),
         }
     }
 }

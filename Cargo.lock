@@ -970,7 +970,9 @@ name = "insite"
 version = "0.1.0-dev"
 dependencies = [
  "clap",
+ "flate2",
  "insite-core",
+ "libc",
  "serde_json",
  "tokio",
 ]

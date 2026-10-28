@@ -11,36 +11,55 @@ pub mod stack;
 pub mod tls;
 pub mod weight;
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use url::Url;
 
 use crate::collect::target::display_host;
-use crate::report::{Modules, Outcome, Report, SCHEMA_VERSION, Status, TargetInfo};
+use crate::report::{Module, ModuleName, Modules, Outcome, Report, SCHEMA_VERSION, Selection, Status, TargetInfo};
 use crate::snapshot::Snapshot;
 
 pub fn analyze(snapshot: &Snapshot) -> Report {
-    let network = network::analyze(snapshot);
-    let final_url = network.data.as_ref().and_then(|n| n.final_url.clone());
-    let tls = tls::analyze(snapshot);
-    let dns = dns::analyze(snapshot);
-    let infra = infra::analyze(snapshot);
-    let content = content::content(snapshot);
-    let seo = seo::analyze(snapshot, &content);
-    let weight = weight::analyze(snapshot, &content);
-    let stack = stack::analyze(snapshot, &content);
-    let security = security::analyze(snapshot, &content);
+    analyze_selected(snapshot, Selection::all())
+}
+
+/// Analyzes the modules in `selection`; the others are reported as skipped.
+/// Each analyzer runs isolated: a panic becomes a `failed` module, not a crash.
+pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
+    let content = guarded("content", || content::content(snapshot))
+        .unwrap_or_else(|e| Err(format!("the page could not be analyzed: {e}")));
+    let network = run(selection, ModuleName::Network, || network::analyze(snapshot));
+    let final_url = network.data.as_ref().and_then(|n| n.final_url.clone()).or_else(|| {
+        snapshot
+            .chain
+            .last()
+            .filter(|h| !h.is_redirect() && snapshot.page.is_some())
+            .map(|h| h.url.clone())
+    });
+    let modules = Modules {
+        tls: run(selection, ModuleName::Tls, || tls::analyze(snapshot)),
+        dns: run(selection, ModuleName::Dns, || dns::analyze(snapshot)),
+        infra: run(selection, ModuleName::Infra, || infra::analyze(snapshot)),
+        security: run(selection, ModuleName::Security, || {
+            security::analyze(snapshot, &content)
+        }),
+        stack: run(selection, ModuleName::Stack, || stack::analyze(snapshot, &content)),
+        seo: run(selection, ModuleName::Seo, || seo::analyze(snapshot, &content)),
+        weight: run(selection, ModuleName::Weight, || weight::analyze(snapshot, &content)),
+        network,
+    };
     let outcome = outcome(
         snapshot,
         &[
-            ("network", network.status),
-            ("tls", tls.status),
-            ("dns", dns.status),
-            ("infra", infra.status),
-            ("security", security.status),
-            ("seo", seo.status),
-            ("weight", weight.status),
-            ("stack", stack.status),
+            ("network", modules.network.status),
+            ("tls", modules.tls.status),
+            ("dns", modules.dns.status),
+            ("infra", modules.infra.status),
+            ("security", modules.security.status),
+            ("stack", modules.stack.status),
+            ("seo", modules.seo.status),
+            ("weight", modules.weight.status),
         ],
     );
 
@@ -58,17 +77,36 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
         started_at: rfc3339(snapshot.collected_at),
         duration_ms: network::ms(snapshot.duration),
         outcome,
-        modules: Modules {
-            network,
-            tls,
-            dns,
-            infra,
-            security,
-            stack,
-            seo,
-            weight,
-        },
+        sources: crate::data::sources(),
+        modules,
     }
+}
+
+fn run<T>(selection: Selection, name: ModuleName, analyzer: impl FnOnce() -> Module<T>) -> Module<T> {
+    if !selection.contains(name) {
+        return Module::skipped("not selected");
+    }
+    guarded(name.as_str(), analyzer).unwrap_or_else(|e| Module {
+        status: Status::Failed,
+        reason: Some(format!(
+            "internal error in the {} analyzer ({e}); please report it with the snapshot from --save",
+            name.as_str()
+        )),
+        data: None,
+        findings: Vec::new(),
+    })
+}
+
+/// Runs `f`, turning a panic into its message.
+fn guarded<T>(what: &str, f: impl FnOnce() -> T) -> Result<T, String> {
+    catch_unwind(AssertUnwindSafe(f)).map_err(|panic| {
+        let message = panic
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| panic.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_owned());
+        format!("{what}: {message}")
+    })
 }
 
 fn outcome(snapshot: &Snapshot, modules: &[(&str, Status)]) -> Outcome {
@@ -140,6 +178,15 @@ pub fn rfc3339(t: SystemTime) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn panics_become_failed_modules() {
+        let module: Module<()> = run(Selection::all(), ModuleName::Tls, || panic!("boom"));
+        assert_eq!(module.status, Status::Failed);
+        assert!(module.reason.unwrap().contains("boom"));
+        let skipped: Module<()> = run(Selection::parse("dns").unwrap(), ModuleName::Tls, || unreachable!());
+        assert_eq!(skipped.status, Status::Skipped);
+    }
 
     #[test]
     fn formats_rfc3339() {

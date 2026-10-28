@@ -26,7 +26,16 @@ pub struct Report {
     pub started_at: String,
     pub duration_ms: f64,
     pub outcome: Outcome,
+    /// Reference data the analysis used, with versions, so results can be traced.
+    pub sources: Vec<DataSource>,
     pub modules: Modules,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct DataSource {
+    pub name: &'static str,
+    pub version: String,
+    pub license: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,6 +84,82 @@ pub struct Modules {
     pub weight: Module<Weight>,
 }
 
+/// The modules of a report, in report order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModuleName {
+    Network,
+    Tls,
+    Dns,
+    Infra,
+    Security,
+    Stack,
+    Seo,
+    Weight,
+}
+
+impl ModuleName {
+    pub const ALL: [ModuleName; 8] = [
+        ModuleName::Network,
+        ModuleName::Tls,
+        ModuleName::Dns,
+        ModuleName::Infra,
+        ModuleName::Security,
+        ModuleName::Stack,
+        ModuleName::Seo,
+        ModuleName::Weight,
+    ];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ModuleName::Network => "network",
+            ModuleName::Tls => "tls",
+            ModuleName::Dns => "dns",
+            ModuleName::Infra => "infra",
+            ModuleName::Security => "security",
+            ModuleName::Stack => "stack",
+            ModuleName::Seo => "seo",
+            ModuleName::Weight => "weight",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL
+            .into_iter()
+            .find(|m| m.as_str().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+/// A set of modules, as chosen with `-m`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Selection(u8);
+
+impl Selection {
+    pub fn all() -> Self {
+        Selection(u8::MAX)
+    }
+
+    pub fn contains(self, module: ModuleName) -> bool {
+        self.0 & 1 << module as u8 != 0
+    }
+
+    /// A comma-separated list such as `tls,dns`.
+    pub fn parse(list: &str) -> Result<Self, String> {
+        let mut bits = 0u8;
+        for name in list.split(',').filter(|n| !n.trim().is_empty()) {
+            let module = ModuleName::parse(name).ok_or_else(|| {
+                let known: Vec<&str> = ModuleName::ALL.iter().map(|m| m.as_str()).collect();
+                format!("unknown module `{}` (known: {})", name.trim(), known.join(", "))
+            })?;
+            bits |= 1 << module as u8;
+        }
+        if bits == 0 {
+            return Err("no module chosen".into());
+        }
+        Ok(Selection(bits))
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Module<T> {
     pub status: Status,
@@ -82,6 +167,17 @@ pub struct Module<T> {
     pub reason: Option<String>,
     pub data: Option<T>,
     pub findings: Vec<Finding>,
+}
+
+impl<T> Module<T> {
+    pub fn skipped(reason: impl Into<String>) -> Self {
+        Module {
+            status: Status::Skipped,
+            reason: Some(reason.into()),
+            data: None,
+            findings: Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -127,5 +223,20 @@ impl Severity {
             "critical" => Severity::Critical,
             _ => return None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn selections_parse_module_lists() {
+        let s = Selection::parse("tls, DNS").unwrap();
+        assert!(s.contains(ModuleName::Tls) && s.contains(ModuleName::Dns));
+        assert!(!s.contains(ModuleName::Seo));
+        assert!(Selection::parse("tls,css").unwrap_err().contains("css"));
+        assert!(Selection::parse(",").is_err());
+        assert!(ModuleName::ALL.iter().all(|m| Selection::all().contains(*m)));
     }
 }

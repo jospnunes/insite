@@ -7,11 +7,13 @@
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, SystemTime};
 
+use serde::{Deserialize, Serialize};
+
 /// Bumped on every change to these types. Each bump ships a conversion from
 /// the previous version, so recorded fixtures never need to be re-recorded.
 pub const SNAPSHOT_VERSION: u32 = 1;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Snapshot {
     pub snapshot_version: u32,
     pub collector_version: String,
@@ -43,7 +45,7 @@ pub struct Snapshot {
     pub auxiliary: Auxiliary,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Auxiliary {
     pub robots: Option<AuxFile>,
     pub security_txt: Option<AuxFile>,
@@ -52,7 +54,7 @@ pub struct Auxiliary {
 
 /// A file fetched as is. Whether it is what it claims to be (many servers answer
 /// 200 with an HTML page for any path) is decided by the analysis.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuxFile {
     pub requested: String,
     /// After redirects.
@@ -60,13 +62,14 @@ pub struct AuxFile {
     pub status: Option<u16>,
     pub content_type: Option<String>,
     /// Decoded, at most the file's limit.
+    #[serde(with = "base64")]
     pub body: Vec<u8>,
     pub truncated: bool,
     pub redirects: u8,
     pub error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DomainRecords {
     pub role: DomainRole,
     pub host: String,
@@ -94,13 +97,14 @@ impl DomainRecords {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DomainRole {
     Input,
     Final,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DnsAnswer {
     /// Without the trailing dot.
     pub name: String,
@@ -108,7 +112,8 @@ pub struct DnsAnswer {
     pub result: DnsResult,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DnsResult {
     /// Presentation format; TXT strings of one record are concatenated.
     Records(Vec<String>),
@@ -119,7 +124,7 @@ pub enum DnsResult {
     Failed(String),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AsnLookup {
     pub ip: IpAddr,
     pub asn: Option<u32>,
@@ -131,14 +136,14 @@ pub struct AsnLookup {
 }
 
 /// What we sent, recorded because it changes what servers answer.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestProfile {
     pub user_agent: String,
     pub accept_language: String,
     pub accept_encoding: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Hop {
     pub url: String,
     pub connection: ConnectionUse,
@@ -176,14 +181,15 @@ impl Hop {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ConnectionUse {
     New(Box<ConnectionInfo>),
     /// An earlier connection to the same origin carried this request.
     Reused,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnectionInfo {
     /// Present when the host was resolved for this connection; absent for IP
     /// literals and for hosts already resolved earlier in the chain.
@@ -198,7 +204,7 @@ pub struct ConnectionInfo {
     pub proxy: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HostResolution {
     pub host: String,
     /// Query sent until the first address was resolved. Absent when the system
@@ -210,7 +216,8 @@ pub struct HostResolution {
     pub source: ResolutionSource,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ResolutionSource {
     Resolver,
     /// Our resolver failed and the operating system resolved the name (VPN with
@@ -218,7 +225,7 @@ pub enum ResolutionSource {
     System,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsInfo {
     /// ClientHello until the handshake completed.
     pub handshake: Duration,
@@ -229,11 +236,13 @@ pub struct TlsInfo {
     pub alpn: Option<String>,
     pub verification: Verification,
     /// DER, leaf first, as sent by the server.
+    #[serde(with = "base64_list")]
     pub certificates: Vec<Vec<u8>>,
     pub ocsp_stapled: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Verification {
     Valid,
     /// webpki stops at the first problem; the TLS analyzer checks dates and names
@@ -244,7 +253,8 @@ pub enum Verification {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CertProblem {
     Expired,
     NotYetValid,
@@ -255,7 +265,8 @@ pub enum CertProblem {
     Other,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HttpVersion {
     Http1,
     Http2,
@@ -270,9 +281,10 @@ impl HttpVersion {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Page {
     /// Decoded body, at most `Options::body_limit` bytes.
+    #[serde(with = "base64")]
     pub body: Vec<u8>,
     /// Bytes on the wire, before decompression.
     pub transferred: u64,
@@ -282,7 +294,8 @@ pub struct Page {
     pub decode_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HttpCheck {
     Response {
         status: u16,
@@ -294,14 +307,15 @@ pub enum HttpCheck {
     Failed(FetchFailure),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FetchFailure {
     pub kind: FailureKind,
     pub url: String,
     pub message: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FailureKind {
     InvalidInput,
     Dns,
@@ -316,4 +330,144 @@ pub enum FailureKind {
     Timeout,
     /// The proxy refused or broke the tunnel; says nothing about the site.
     Proxy,
+}
+
+impl Snapshot {
+    /// The snapshot as JSON, bodies and certificates in base64.
+    pub fn to_json(&self) -> String {
+        serde_json::to_string(self).expect("snapshots always serialize")
+    }
+
+    /// Reads a snapshot saved by this or an earlier version that has a conversion.
+    pub fn from_json(text: &str) -> Result<Snapshot, String> {
+        let value: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("not a snapshot: {e}"))?;
+        let version = value.get("snapshot_version").and_then(serde_json::Value::as_u64);
+        match version {
+            Some(v) if v == u64::from(SNAPSHOT_VERSION) => {
+                serde_json::from_value(value).map_err(|e| format!("damaged snapshot: {e}"))
+            }
+            Some(v) => Err(format!(
+                "snapshot version {v} is not supported by this insite (it reads version {SNAPSHOT_VERSION})"
+            )),
+            None => Err("not a snapshot: no snapshot_version".into()),
+        }
+    }
+}
+
+/// Byte fields as standard base64 strings, which keeps saved snapshots a third
+/// the size of a JSON array of numbers.
+mod base64 {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    pub fn encode(bytes: &[u8]) -> String {
+        let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+        for chunk in bytes.chunks(3) {
+            let n = chunk
+                .iter()
+                .enumerate()
+                .fold(0u32, |n, (i, &b)| n | u32::from(b) << (16 - 8 * i));
+            for i in 0..4 {
+                if i <= chunk.len() {
+                    out.push(ALPHABET[(n >> (18 - 6 * i) & 63) as usize] as char);
+                } else {
+                    out.push('=');
+                }
+            }
+        }
+        out
+    }
+
+    /// Each byte's value in the alphabet; 255 for bytes outside it.
+    const VALUES: [u8; 256] = {
+        let mut table = [255u8; 256];
+        let mut i = 0;
+        while i < 64 {
+            table[ALPHABET[i] as usize] = i as u8;
+            i += 1;
+        }
+        table
+    };
+
+    pub fn decode(text: &str) -> Result<Vec<u8>, String> {
+        let text = text.trim_end_matches('=');
+        let mut out = Vec::with_capacity(text.len() * 3 / 4);
+        let (mut acc, mut bits) = (0u32, 0);
+        for c in text.bytes() {
+            let v = VALUES[c as usize];
+            if v == 255 {
+                return Err(format!("invalid base64 byte {c:#04x}"));
+            }
+            acc = acc << 6 | u32::from(v);
+            bits += 6;
+            if bits >= 8 {
+                bits -= 8;
+                out.push((acc >> bits) as u8);
+            }
+        }
+        Ok(out)
+    }
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        decode(&String::deserialize(d)?).map_err(serde::de::Error::custom)
+    }
+}
+
+mod base64_list {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S: Serializer>(list: &[Vec<u8>], s: S) -> Result<S::Ok, S::Error> {
+        list.iter()
+            .map(|b| super::base64::encode(b))
+            .collect::<Vec<_>>()
+            .serialize(s)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<Vec<u8>>, D::Error> {
+        Vec::<String>::deserialize(d)?
+            .iter()
+            .map(|t| super::base64::decode(t).map_err(serde::de::Error::custom))
+            .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn base64_round_trips() {
+        for bytes in [
+            &b""[..],
+            b"f",
+            b"fo",
+            b"foo",
+            b"foob",
+            b"fooba",
+            b"foobar",
+            &[0, 255, 128, 7],
+        ] {
+            let text = base64::encode(bytes);
+            assert_eq!(base64::decode(&text).unwrap(), bytes);
+        }
+        assert_eq!(base64::encode(b"foobar"), "Zm9vYmFy");
+        assert_eq!(base64::encode(b"fo"), "Zm8=");
+        assert!(base64::decode("Zm9v!").is_err());
+    }
+
+    #[test]
+    fn versions_are_checked() {
+        assert!(
+            Snapshot::from_json("{\"snapshot_version\": 999}")
+                .unwrap_err()
+                .contains("999")
+        );
+        assert!(Snapshot::from_json("[]").is_err());
+        assert!(Snapshot::from_json("not json").is_err());
+    }
 }

@@ -1,101 +1,64 @@
-//! Terminal rendering of a `Report`. ANSI colors written by hand.
+//! Terminal rendering of a `Report`: a first screen that answers the essentials
+//! without scrolling, and with `-v` every section in full, with evidence.
 
 use std::fmt::Write;
 
+use insite_core::analyze::dns::DomainReport;
 use insite_core::analyze::network::{HttpsEnforcement, Network};
-use insite_core::report::{Outcome, Report, Severity};
+use insite_core::report::{Finding, Module, Outcome, Report, Severity, Status};
 
-struct Style {
-    color: bool,
-}
+use crate::style::{Style, wrap_items};
 
-impl Style {
-    fn paint(&self, code: &str, text: &str) -> String {
-        if self.color {
-            format!("\x1b[{code}m{text}\x1b[0m")
-        } else {
-            text.to_owned()
-        }
-    }
-    fn bold(&self, t: &str) -> String {
-        self.paint("1", t)
-    }
-    fn dim(&self, t: &str) -> String {
-        self.paint("2", t)
-    }
-    fn red(&self, t: &str) -> String {
-        self.paint("31", t)
-    }
-    fn green(&self, t: &str) -> String {
-        self.paint("32", t)
-    }
-    fn yellow(&self, t: &str) -> String {
-        self.paint("33", t)
-    }
-}
+/// Width of the section labels on the first screen.
+const LABEL: usize = 10;
 
-pub fn terminal(report: &Report, color: bool) -> String {
-    let s = Style { color };
+pub fn terminal(report: &Report, color: bool, verbose: bool, width: usize) -> String {
+    let s = Style::new(color);
     let mut out = String::new();
     let host = s.bold(&report.target.display_host);
+    let m = &report.modules;
 
     if let Outcome::Unreachable { reason } = &report.outcome {
         let _ = writeln!(out, "{host}  {}  {reason}", s.red("unreachable"));
         return out;
     }
+    if let Some(net) = &m.network.data {
+        headline(&mut out, &s, &host, net, report);
+    } else {
+        let _ = writeln!(out, "{host}");
+    }
+    out.push('\n');
 
-    if let Some(net) = &report.modules.network.data {
-        headline(&mut out, &s, &host, net);
+    for (label, text) in summary_lines(report, &s, width) {
+        let _ = writeln!(out, "{}{}", s.bold(&format!("{label:<LABEL$}")), text);
     }
 
-    if let Some(stack) = &report.modules.stack.data {
-        let names: Vec<String> = stack
-            .technologies
-            .iter()
-            .map(|t| {
-                let mut name = t.name.clone();
-                if let Some(v) = &t.version {
-                    name.push(' ');
-                    name.push_str(v);
-                }
-                if t.confidence < 100 {
-                    name.push('?');
-                }
-                name
-            })
-            .collect();
-        if !names.is_empty() {
-            let _ = writeln!(out, "\n{}  {}", s.bold("stack"), names.join(" · "));
-        }
+    if verbose {
+        details(&mut out, report, &s, width);
     }
 
-    if let Some(sec) = &report.modules.security.data
-        && let (Some(grade), Some(score)) = (sec.grade, sec.score)
-    {
-        let painted = match grade.as_bytes()[0] {
-            b'A' => s.green(grade),
-            b'B' | b'C' => s.yellow(grade),
-            _ => s.red(grade),
-        };
-        let method = format!("{score} points · MDN HTTP Observatory method");
-        let _ = writeln!(out, "\n{}  {painted}  {}", s.bold("security"), s.dim(&method));
-    }
-
-    let findings: Vec<_> = report
-        .modules
-        .network
-        .findings
-        .iter()
-        .chain(&report.modules.tls.findings)
-        .chain(&report.modules.dns.findings)
-        .chain(&report.modules.infra.findings)
-        .chain(&report.modules.security.findings)
-        .chain(&report.modules.seo.findings)
-        .chain(&report.modules.weight.findings)
-        .collect();
+    let mut findings: Vec<&Finding> = [
+        &m.network.findings,
+        &m.tls.findings,
+        &m.dns.findings,
+        &m.infra.findings,
+        &m.security.findings,
+        &m.stack.findings,
+        &m.seo.findings,
+        &m.weight.findings,
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    findings.sort_by_key(|f| std::cmp::Reverse(f.severity));
+    let hidden = if verbose {
+        0
+    } else {
+        findings.iter().filter(|f| f.severity == Severity::Info).count()
+    };
     if !findings.is_empty() {
         out.push('\n');
-        for f in findings {
+        for f in findings.iter().filter(|f| verbose || f.severity > Severity::Info) {
             let label = format!("{:<8}", severity(f.severity));
             let label = match f.severity {
                 Severity::High | Severity::Critical => s.red(&label),
@@ -103,19 +66,182 @@ pub fn terminal(report: &Report, color: bool) -> String {
                 _ => s.dim(&label),
             };
             let _ = writeln!(out, "  {label}{}  {}", f.title, s.dim(f.id));
+            if verbose {
+                let evidence = clip(&f.evidence, 300);
+                for (prefix, text) in [
+                    ("", f.detail.as_str()),
+                    ("fix: ", f.fix.as_str()),
+                    ("evidence: ", evidence.as_str()),
+                ] {
+                    if !text.is_empty() {
+                        let _ = writeln!(out, "{}", indent(&format!("{prefix}{text}"), 10, width));
+                    }
+                }
+            }
+        }
+        if hidden > 0 {
+            let _ = writeln!(out, "  {}", s.dim(&format!("+{hidden} info (-v shows them)")));
         }
     }
 
+    let mut notes = Vec::new();
     if let Outcome::Partial { reasons } = &report.outcome {
+        notes.extend(reasons.iter().map(|r| s.yellow(&format!("partial: {r}"))));
+    }
+    if !notes.is_empty() {
         out.push('\n');
-        for reason in reasons {
-            let _ = writeln!(out, "{} {reason}", s.yellow("partial:"));
+        for n in notes {
+            let _ = writeln!(out, "{n}");
         }
     }
     out
 }
 
-fn headline(out: &mut String, s: &Style, host: &str, net: &Network) {
+/// The first screen's sections: label and one line of text each.
+pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static str, String)> {
+    let m = &report.modules;
+    let mut lines = Vec::new();
+    if let Some(text) = summary(&m.stack, s, |stack| {
+        let names: Vec<String> = stack
+            .technologies
+            .iter()
+            .map(|t| {
+                let mut name = t.name.clone();
+                if let Some(v) = &t.version {
+                    name = format!("{name} {v}");
+                }
+                if t.confidence < 100 {
+                    s.dim(&format!("{name}?"))
+                } else {
+                    name
+                }
+            })
+            .collect();
+        if names.is_empty() {
+            s.dim("nothing recognized")
+        } else {
+            wrap_items(&names, " · ", width, LABEL)
+        }
+    }) {
+        lines.push(("stack", text));
+    }
+    if let Some(text) = summary(&m.security, s, |sec| match (sec.grade, sec.score) {
+        (Some(grade), Some(score)) => {
+            let painted = match grade.as_bytes()[0] {
+                b'A' => s.green(&format!("{grade:<2}")),
+                b'B' | b'C' => s.yellow(&format!("{grade:<2}")),
+                _ => s.red(&format!("{grade:<2}")),
+            };
+            let mut parts = vec![format!("{painted}  score {score}")];
+            parts.extend(issues(&m.security.findings));
+            parts.join(" · ")
+        }
+        _ => s.dim(&format!(
+            "no grade: {}",
+            m.security.reason.as_deref().unwrap_or("not representative")
+        )),
+    }) {
+        lines.push(("security", text));
+    }
+    if let Some(text) = summary(&m.tls, s, |tls| {
+        let mut parts = Vec::new();
+        if let Some(c) = &tls.certificate {
+            parts.push(c.issuer_organization.clone().unwrap_or_else(|| c.issuer.clone()));
+        }
+        parts.push(tls.version.replace("TLSv", "TLS "));
+        if let Some(c) = &tls.certificate {
+            parts.push(match c.days_remaining {
+                d if d < 0 => s.red(&format!("expired {} days ago", -d)),
+                d if d < 14 => s.yellow(&format!("expires in {d} days")),
+                d => format!("expires in {d} days"),
+            });
+        }
+        if !tls.trusted {
+            parts.push(s.red("not trusted"));
+        }
+        parts.join(" · ")
+    }) {
+        lines.push(("tls", text));
+    }
+    if let Some(dns) = m.dns.data.as_ref().filter(|_| m.dns.status != Status::Skipped) {
+        if let Some(input) = dns.domains.first() {
+            lines.push(("email", email(input, s)));
+            lines.push(("dns", dns_line(input, s)));
+        }
+    } else if let Some(text) = summary(&m.dns, s, |_| String::new()) {
+        lines.push(("dns", text));
+    }
+    if let Some(infra) = m
+        .infra
+        .data
+        .as_ref()
+        .filter(|i| i.challenge.is_some() || i.hosting.is_some() || !i.cdn.is_empty())
+    {
+        let mut parts = Vec::new();
+        if let Some(h) = &infra.hosting {
+            parts.push(format!("hosted on {h}"));
+        }
+        if !infra.cdn.is_empty() {
+            parts.push(format!(
+                "CDN {}",
+                infra.cdn.iter().map(|c| c.name.as_str()).collect::<Vec<_>>().join(", ")
+            ));
+        }
+        if let Some(c) = &infra.challenge {
+            parts.push(s.yellow(&format!("{} bot challenge", c.name)));
+        }
+        lines.push(("infra", parts.join(" · ")));
+    }
+    if let Some(text) = summary(&m.seo, s, |seo| {
+        let mut parts = vec![if seo.indexable {
+            "indexable".to_owned()
+        } else {
+            s.red("not indexable")
+        }];
+        parts.extend(issues(&m.seo.findings));
+        parts.join(" · ")
+    }) {
+        lines.push(("seo", text));
+    }
+    if let Some(text) = summary(&m.weight, s, |w| {
+        let mut size = bytes(w.html_transferred_bytes);
+        if w.html_bytes != w.html_transferred_bytes {
+            size = format!("{size} ({} uncompressed)", bytes(w.html_bytes));
+        }
+        let mut parts = vec![format!("HTML {size}"), plural(w.scripts_external, "script")];
+        if !w.render_blocking_scripts.is_empty() {
+            parts.push(format!("{} render-blocking", w.render_blocking_scripts.len()));
+        }
+        parts.push(plural(w.third_parties.len(), "third party").replace("partys", "parties"));
+        parts.join(" · ")
+    }) {
+        lines.push(("weight", text));
+    }
+
+    lines
+}
+
+/// The module's summary text, or its status when it did not run normally.
+/// Unselected modules print nothing.
+fn summary<T>(module: &Module<T>, s: &Style, text: impl FnOnce(&T) -> String) -> Option<String> {
+    let reason = module.reason.as_deref().unwrap_or_default();
+    match (module.status, &module.data) {
+        (Status::Skipped, _) if reason == "not selected" => None,
+        (Status::Skipped, _) => Some(s.dim(&format!("skipped: {reason}"))),
+        (Status::Timeout, _) => Some(s.yellow(&format!("timeout: {reason}"))),
+        (Status::Failed, _) => Some(s.red(&format!("failed: {reason}"))),
+        (_, Some(data)) => Some(text(data)),
+        (_, None) => Some(s.dim(reason)),
+    }
+}
+
+/// "2 issues" counted from the findings worth attention (low and above).
+fn issues(findings: &[Finding]) -> Option<String> {
+    let n = findings.iter().filter(|f| f.severity > Severity::Info).count();
+    (n > 0).then(|| plural(n, "issue"))
+}
+
+fn headline(out: &mut String, s: &Style, host: &str, net: &Network, report: &Report) {
     let status = net.status.map_or_else(String::new, |code| {
         let text = code.to_string();
         match code {
@@ -158,11 +284,23 @@ fn headline(out: &mut String, s: &Style, host: &str, net: &Network) {
         timing.push(format!("ttfb {}", ms(p.ttfb_ms)));
         timing.push(format!("download {}", ms(p.download_ms)));
     }
-    let _ = writeln!(out, "  {}", s.dim(&timing.join(" · ")));
+    if !timing.is_empty() {
+        let _ = writeln!(out, "  {}", s.dim(&timing.join(" · ")));
+    }
 
     let mut facts = Vec::new();
     if let Some(peer) = &net.peer {
-        facts.push(peer.clone());
+        let owner = report.modules.infra.data.as_ref().and_then(|i| {
+            let name = i.hosting.clone().or_else(|| i.as_name.as_deref().map(short_as_name))?;
+            Some(match i.asn {
+                Some(asn) => format!("AS{asn} {name}"),
+                None => name,
+            })
+        });
+        facts.push(match owner {
+            Some(o) => format!("{peer} ({o})"),
+            None => peer.clone(),
+        });
     }
     if let Some(proxy) = &net.proxy {
         facts.push(format!("via proxy {proxy}"));
@@ -190,8 +328,439 @@ fn headline(out: &mut String, s: &Style, host: &str, net: &Network) {
     }
 }
 
+/// `CLOUDFLARENET, US` reads as `CLOUDFLARENET`.
+fn short_as_name(name: &str) -> String {
+    match name.rsplit_once(", ") {
+        Some((head, cc)) if cc.len() == 2 && cc.chars().all(|c| c.is_ascii_uppercase()) => head.to_owned(),
+        _ => name.to_owned(),
+    }
+}
+
+fn email(d: &DomainReport, s: &Style) -> String {
+    let reg = d.domain.as_str();
+    let dmarc_at = format!("_dmarc.{reg}");
+    let mut parts = Vec::new();
+    let mut unknown = Vec::new();
+    match d.mx.first() {
+        Some(mx) => parts.push(
+            d.mail_provider
+                .clone()
+                .unwrap_or_else(|| mx.trim_end_matches('.').to_owned()),
+        ),
+        None if d.absence_known(reg, "MX") => parts.push("no MX".to_owned()),
+        None => unknown.push("MX"),
+    }
+    match &d.spf {
+        Some(spf) => parts.push(
+            spf.all
+                .as_ref()
+                .map_or_else(|| "SPF".to_owned(), |all| format!("SPF {all}")),
+        ),
+        None if d.absence_known(reg, "TXT") => parts.push(s.yellow("no SPF")),
+        None => unknown.push("SPF"),
+    }
+    match &d.dmarc {
+        Some(dmarc) => parts.push(match dmarc.policy.as_deref() {
+            Some("none") => s.yellow("DMARC p=none"),
+            Some(p) => format!("DMARC p={p}"),
+            None => "DMARC".to_owned(),
+        }),
+        None if d.absence_known(&dmarc_at, "TXT") => parts.push(s.yellow("no DMARC")),
+        None => unknown.push("DMARC"),
+    }
+    if !d.dkim_selectors_found.is_empty() {
+        parts.push(format!("DKIM {}", d.dkim_selectors_found.join(", ")));
+    }
+    if !unknown.is_empty() {
+        parts.push(s.dim(&format!("{} not measured", unknown.join(", "))));
+    }
+    parts.join(" · ")
+}
+
+fn dns_line(d: &DomainReport, s: &Style) -> String {
+    let reg = d.domain.as_str();
+    let mut parts = Vec::new();
+    match (&d.dns_provider, d.ns.first()) {
+        (Some(p), _) => parts.push(p.clone()),
+        (None, Some(ns)) => parts.push(ns.trim_end_matches('.').to_owned()),
+        (None, None) => {}
+    }
+    let mut unknown = Vec::new();
+    match (d.dnssec, d.absence_known(reg, "DS")) {
+        (true, _) => parts.push("DNSSEC".to_owned()),
+        (false, true) => parts.push("no DNSSEC".to_owned()),
+        (false, false) => unknown.push("DNSSEC"),
+    }
+    match (d.caa.is_empty(), d.absences_reliable) {
+        (false, _) => parts.push("CAA".to_owned()),
+        (true, true) => parts.push("no CAA".to_owned()),
+        (true, false) => unknown.push("CAA"),
+    }
+    if !unknown.is_empty() {
+        parts.push(s.dim(&format!("{} not measured", unknown.join(", "))));
+    }
+    parts.join(" · ")
+}
+
+// ---- -v: every section in full ---------------------------------------------
+
+fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
+    let m = &report.modules;
+    let section = |out: &mut String, name: &str, status: Status, reason: Option<&str>| {
+        let _ = writeln!(out, "\n{}", s.bold(name));
+        let state = match status {
+            Status::Ok => return,
+            Status::Partial => "partial",
+            Status::Timeout => "timeout",
+            Status::Failed => "failed",
+            Status::Skipped => "skipped",
+        };
+        let note = reason.map_or_else(|| state.to_owned(), |r| format!("{state}: {r}"));
+        let _ = writeln!(out, "{}", s.dim(&indent(&note, 2, width)));
+    };
+    let row = |out: &mut String, key: &str, value: &str| {
+        if !value.is_empty() {
+            let _ = writeln!(
+                out,
+                "  {}{}",
+                s.dim(&format!("{key:<13}")),
+                indent(value, 15, width).trim_start()
+            );
+        }
+    };
+
+    if let Some(net) = &m.network.data {
+        section(out, "network", m.network.status, m.network.reason.as_deref());
+        for r in &net.redirects {
+            row(
+                out,
+                "redirect",
+                &format!("{} → {} {} ({} ms)", r.url, r.status, r.location, ms(r.ms)),
+            );
+        }
+        if let Some(p) = &net.page {
+            let mut text = format!(
+                "{} transferred, {} decoded",
+                bytes(p.transferred_bytes),
+                bytes(p.size_bytes)
+            );
+            if let Some(e) = &p.content_encoding {
+                text.push_str(&format!(" ({e})"));
+            }
+            if p.truncated {
+                text.push_str(", cut at the limit");
+            }
+            row(out, "page", &text);
+        }
+        if let Some(source) = net.dns_source {
+            row(out, "resolved by", source);
+        }
+    }
+
+    if let Some(tls) = &m.tls.data {
+        section(out, "tls", m.tls.status, m.tls.reason.as_deref());
+        let mut connection = vec![tls.version.clone(), tls.cipher_suite.clone()];
+        connection.extend(tls.key_exchange.clone());
+        connection.extend(tls.alpn.clone());
+        row(out, "connection", &connection.join(" · "));
+        if let Some(c) = &tls.certificate {
+            row(out, "subject", &c.subject);
+            row(out, "issuer", &c.issuer);
+            row(
+                out,
+                "valid",
+                &format!(
+                    "{} → {} ({} days, {} left)",
+                    c.not_before, c.not_after, c.lifetime_days, c.days_remaining
+                ),
+            );
+            row(out, "names", &c.names.join(", "));
+            row(
+                out,
+                "key",
+                &format!("{} · {} · {} SCTs", c.key, c.signature_algorithm, c.sct_count),
+            );
+        }
+        let chain: Vec<&str> = tls.chain.iter().map(|e| e.subject.as_str()).collect();
+        row(out, "chain", &chain.join(" → "));
+        row(out, "OCSP stapled", if tls.ocsp_stapled { "yes" } else { "no" });
+        if let Some(e) = &tls.verification_error {
+            row(out, "error", e);
+        }
+    }
+
+    if let Some(dns) = &m.dns.data {
+        for d in &dns.domains {
+            section(out, &format!("dns {}", d.domain), m.dns.status, m.dns.reason.as_deref());
+            row(out, "A", &d.a.join(", "));
+            row(out, "AAAA", &d.aaaa.join(", "));
+            row(out, "CNAME", &d.cname.join(", "));
+            let provider = d.dns_provider.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
+            row(out, "NS", format!("{}{provider}", d.ns.join(", ")).trim());
+            let mail = d.mail_provider.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
+            row(out, "MX", format!("{}{mail}", d.mx.join(", ")).trim());
+            if let Some(spf) = &d.spf {
+                let incomplete = if spf.lookups_incomplete { "+" } else { "" };
+                row(
+                    out,
+                    "SPF",
+                    &format!("{} ({}{incomplete} lookups)", spf.record, spf.lookups),
+                );
+            }
+            if let Some(dmarc) = &d.dmarc {
+                row(out, "DMARC", &format!("{} (at {})", dmarc.record, dmarc.found_at));
+            }
+            row(out, "DKIM", &d.dkim_selectors_found.join(", "));
+            row(out, "CAA", &d.caa.join(", "));
+            let yes = |b: bool| if b { "yes" } else { "no" };
+            row(
+                out,
+                "policies",
+                &format!(
+                    "DNSSEC {} · MTA-STS {} · TLS-RPT {} · BIMI {}",
+                    yes(d.dnssec),
+                    yes(d.mta_sts),
+                    yes(d.tls_rpt),
+                    yes(d.bimi)
+                ),
+            );
+            if !d.failed_queries.is_empty() {
+                row(out, "failed", &d.failed_queries.join(", "));
+            }
+        }
+    }
+
+    if let Some(infra) = &m.infra.data {
+        section(out, "infra", m.infra.status, m.infra.reason.as_deref());
+        row(out, "IP", infra.ip.as_deref().unwrap_or_default());
+        let asn = infra
+            .asn
+            .map(|a| format!("AS{a} {}", infra.as_name.as_deref().unwrap_or_default()));
+        row(out, "AS", asn.as_deref().unwrap_or_default());
+        row(out, "prefix", infra.prefix.as_deref().unwrap_or_default());
+        row(out, "country", infra.country.as_deref().unwrap_or_default());
+        row(out, "hosting", infra.hosting.as_deref().unwrap_or_default());
+        for c in &infra.cdn {
+            row(out, "CDN", &format!("{} ({})", c.name, c.evidence));
+        }
+        row(out, "server", infra.server.as_deref().unwrap_or_default());
+        if let Some(c) = &infra.challenge {
+            row(out, "challenge", &format!("{} ({})", c.name, c.evidence));
+        }
+    }
+
+    if let Some(sec) = &m.security.data {
+        section(out, "security", m.security.status, m.security.reason.as_deref());
+        row(out, "method", sec.methodology);
+        for t in &sec.tests {
+            let modifier = if t.modifier == 0 {
+                "  0".to_owned()
+            } else {
+                format!("{:+3}", t.modifier)
+            };
+            let modifier = match t.modifier {
+                m if m < 0 => s.red(&modifier),
+                m if m > 0 => s.green(&modifier),
+                _ => s.dim(&modifier),
+            };
+            let _ = writeln!(out, "  {} {modifier}  {}", s.dim(&format!("{:<30}", t.test)), t.result);
+        }
+        if let Some(txt) = &sec.security_txt {
+            let mut text = txt.state.to_owned();
+            if !txt.contact.is_empty() {
+                text.push_str(&format!(" · {}", txt.contact.join(", ")));
+            }
+            if let Some(e) = &txt.expires {
+                text.push_str(&format!(" · expires {e}"));
+            }
+            row(out, "security.txt", &text);
+        }
+    }
+
+    if let Some(stack) = &m.stack.data {
+        section(out, "stack", m.stack.status, m.stack.reason.as_deref());
+        for t in &stack.technologies {
+            let mut name = s.bold(&t.name);
+            if let Some(v) = &t.version {
+                name = format!("{name} {v}");
+            }
+            let confidence = if t.confidence < 100 {
+                format!(" {}%", t.confidence)
+            } else {
+                String::new()
+            };
+            let _ = writeln!(
+                out,
+                "  {name}{}  {}",
+                s.yellow(&confidence),
+                s.dim(&t.categories.join(", "))
+            );
+            let evidence: Vec<String> = match &t.implied_by {
+                Some(by) => vec![format!("implied by {by}")],
+                None => t.evidence.iter().map(evidence_text).collect(),
+            };
+            for e in evidence.iter().take(3) {
+                let _ = writeln!(out, "{}", s.dim(&indent(e, 6, width)));
+            }
+        }
+        row(out, "signatures", &stack.signatures);
+    }
+
+    if let Some(seo) = &m.seo.data {
+        section(out, "seo", m.seo.status, m.seo.reason.as_deref());
+        row(
+            out,
+            "title",
+            &seo.title
+                .as_ref()
+                .map(|t| format!("{t} ({} chars)", seo.title_length))
+                .unwrap_or_default(),
+        );
+        row(
+            out,
+            "description",
+            &seo.description
+                .as_ref()
+                .map(|d| format!("{d} ({} chars)", seo.description_length))
+                .unwrap_or_default(),
+        );
+        row(out, "canonical", &seo.canonical.join(", "));
+        row(out, "robots meta", seo.meta_robots.as_deref().unwrap_or_default());
+        row(out, "X-Robots-Tag", &seo.x_robots_tag.join(", "));
+        row(out, "lang", seo.lang.as_deref().unwrap_or_default());
+        row(out, "viewport", if seo.viewport { "yes" } else { "no" });
+        let h: Vec<String> = seo
+            .headings
+            .iter()
+            .enumerate()
+            .filter(|(_, n)| **n > 0)
+            .map(|(i, n)| format!("h{} {n}", i + 1))
+            .collect();
+        row(out, "headings", &h.join(" · "));
+        row(out, "Open Graph", &seo.open_graph.join(", "));
+        row(out, "structured", &seo.structured_data.join(", "));
+        row(out, "hreflang", &seo.hreflang.join(", "));
+        if seo.images > 0 {
+            row(
+                out,
+                "images",
+                &format!("{} ({} without alt)", seo.images, seo.images_without_alt),
+            );
+        }
+        if let Some(r) = &seo.robots_txt {
+            let blocks = if r.blocks_all { " · blocks everything" } else { "" };
+            row(out, "robots.txt", &format!("{}{blocks}", r.state));
+        }
+        if let Some(sm) = &seo.sitemap {
+            row(
+                out,
+                "sitemap",
+                &format!("{} · {} ({} entries)", sm.url, sm.state, sm.entries),
+            );
+        }
+    }
+
+    if let Some(w) = &m.weight.data {
+        section(out, "weight", m.weight.status, m.weight.reason.as_deref());
+        let compression = w.compression.as_deref().unwrap_or("none");
+        row(
+            out,
+            "HTML",
+            &format!(
+                "{} transferred, {} decoded, compression {compression}",
+                bytes(w.html_transferred_bytes),
+                bytes(w.html_bytes)
+            ),
+        );
+        row(
+            out,
+            "scripts",
+            &format!(
+                "{} external, {} inline ({})",
+                w.scripts_external,
+                w.scripts_inline,
+                bytes(w.inline_script_bytes as u64)
+            ),
+        );
+        row(out, "blocking", &w.render_blocking_scripts.join(", "));
+        row(
+            out,
+            "styles",
+            &format!(
+                "{} stylesheets, {} inline ({})",
+                w.stylesheets,
+                w.inline_styles,
+                bytes(w.inline_style_bytes as u64)
+            ),
+        );
+        if w.images > 0 {
+            let formats: Vec<String> = w.image_formats.iter().map(|(f, n)| format!("{f} {n}")).collect();
+            row(
+                out,
+                "images",
+                &format!(
+                    "{} ({}) · {} lazy · {} without dimensions",
+                    w.images,
+                    formats.join(", "),
+                    w.images_lazy,
+                    w.images_without_dimensions
+                ),
+            );
+        }
+        if w.iframes > 0 {
+            row(out, "iframes", &w.iframes.to_string());
+        }
+        for t in &w.third_parties {
+            row(
+                out,
+                "third party",
+                &format!("{} · {} ({})", t.domain, t.resources, t.kinds.join(", ")),
+            );
+        }
+    }
+}
+
+/// What a signature matched: `headers[x-powered-by]: Next.js`, or the selector
+/// for a DOM match, which has no value of its own.
+pub fn evidence_text(e: &insite_core::detect::Evidence) -> String {
+    match &e.key {
+        Some(k) if e.value.is_empty() => format!("{}: {k}", e.field),
+        Some(k) => format!("{}[{k}]: {}", e.field, e.value),
+        None => format!("{}: {}", e.field, e.value),
+    }
+}
+
+/// At most `max` characters, with an ellipsis when cut.
+pub fn clip(text: &str, max: usize) -> String {
+    match text.char_indices().nth(max) {
+        Some((cut, _)) => format!("{}…", &text[..cut]),
+        None => text.to_owned(),
+    }
+}
+
+/// Wraps `text` to `width`, every line indented by `by` spaces.
+fn indent(text: &str, by: usize, width: usize) -> String {
+    let room = width.saturating_sub(by).max(30);
+    let mut lines = Vec::new();
+    for paragraph in text.lines() {
+        let mut line = String::new();
+        for word in paragraph.split_whitespace() {
+            if !line.is_empty() && line.chars().count() + 1 + word.chars().count() > room {
+                lines.push(std::mem::take(&mut line));
+            }
+            if !line.is_empty() {
+                line.push(' ');
+            }
+            line.push_str(word);
+        }
+        lines.push(line);
+    }
+    let pad = " ".repeat(by);
+    lines.iter().map(|l| format!("{pad}{l}")).collect::<Vec<_>>().join("\n")
+}
+
 /// Whole milliseconds, or one decimal below 10 ms.
-fn ms(value: f64) -> String {
+pub fn ms(value: f64) -> String {
     if value < 10.0 {
         format!("{value:.1}")
     } else {
@@ -199,12 +768,57 @@ fn ms(value: f64) -> String {
     }
 }
 
-fn severity(s: Severity) -> &'static str {
+pub fn bytes(n: u64) -> String {
+    match n {
+        0..1_000 => format!("{n} B"),
+        1_000..1_000_000 => format!("{:.0} KB", n as f64 / 1e3),
+        _ => format!("{:.1} MB", n as f64 / 1e6),
+    }
+}
+
+fn plural(n: usize, word: &str) -> String {
+    format!("{n} {word}{}", if n == 1 { "" } else { "s" })
+}
+
+pub fn severity(s: Severity) -> &'static str {
     match s {
         Severity::Info => "info",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sizes_and_names() {
+        assert_eq!(bytes(512), "512 B");
+        assert_eq!(bytes(86_400), "86 KB");
+        assert_eq!(bytes(1_250_000), "1.2 MB");
+        assert_eq!(short_as_name("CLOUDFLARENET, US"), "CLOUDFLARENET");
+        assert_eq!(short_as_name("Some Org, Inc"), "Some Org, Inc");
+        assert_eq!(plural(1, "issue"), "1 issue");
+        assert_eq!(plural(3, "third party").replace("partys", "parties"), "3 third parties");
+    }
+
+    #[test]
+    fn clips_long_text() {
+        assert_eq!(clip("abcdef", 3), "abc…");
+        assert_eq!(clip("abc", 3), "abc");
+        assert_eq!(clip("ação", 2), "aç…");
+    }
+
+    #[test]
+    fn indent_wraps_words() {
+        assert_eq!(indent("one two three", 2, 40), "  one two three");
+        let wrapped = indent(&"word ".repeat(20), 4, 40);
+        assert!(
+            wrapped.lines().all(|l| l.len() <= 40 && l.starts_with("    ")),
+            "{wrapped}"
+        );
     }
 }

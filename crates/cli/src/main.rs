@@ -1,17 +1,20 @@
+mod explain;
+mod markdown;
 mod render;
+mod run;
+mod snapshots;
+mod style;
 
-use std::io::{IsTerminal, Write};
+use std::io::{BufRead, IsTerminal};
+use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Duration;
 
-use clap::Parser;
-use insite_core::analyze;
-use insite_core::collect::dns::Resolver;
+use clap::{Parser, Subcommand};
 use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
 use insite_core::collect::proxy::ProxyConfig;
-use insite_core::collect::target::Target;
-use insite_core::collect::tls::Tls;
-use insite_core::collect::{Collector, Options};
+use insite_core::collect::{Fetch, Options};
+use insite_core::report::Selection;
 use insite_core::snapshot::RequestProfile;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -19,20 +22,63 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 /// not look outdated.
 const CHROME_MAJOR: u32 = 157;
 
-/// Full X-ray of a website from the terminal.
+/// Full X-ray of a website from the terminal: network, TLS, DNS, stack,
+/// security, SEO and weight.
 #[derive(Parser)]
-#[command(name = "insite", version, about)]
-struct Args {
-    /// URL or domain to analyze (https:// is assumed)
-    url: String,
+#[command(name = "insite", version, about, args_conflicts_with_subcommands = true)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+    #[command(flatten)]
+    args: Args,
+}
 
-    /// Print the report as JSON
-    #[arg(short, long)]
+#[derive(Subcommand)]
+enum Command {
+    /// Explain a finding and how to fix it; without an id, list them all
+    Explain {
+        /// A finding id such as sec.hsts.missing, or a prefix such as sec.
+        id: Option<String>,
+    },
+}
+
+#[derive(clap::Args)]
+struct Args {
+    /// URLs or domains to analyze (https:// is assumed). Without any, they are
+    /// read from standard input, one per line.
+    urls: Vec<String>,
+
+    /// Modules to run, comma-separated: network,tls,dns,infra,security,stack,seo,weight
+    #[arg(short, long, value_name = "LIST")]
+    modules: Option<String>,
+
+    /// Print the report as JSON (an array with several sites)
+    #[arg(short, long, conflicts_with_all = ["ndjson", "md"])]
     json: bool,
 
-    /// Deadline for the whole analysis, in seconds
+    /// Print one JSON report per line, as each site finishes
+    #[arg(long, conflicts_with = "md")]
+    ndjson: bool,
+
+    /// Print the report as Markdown, ready for an e-mail or a proposal
+    #[arg(long)]
+    md: bool,
+
+    /// Deadline for each site, in seconds
     #[arg(short, long, default_value_t = 5.0, value_name = "SECONDS")]
     timeout: f64,
+
+    /// Show every section in full, with evidence
+    #[arg(short, long)]
+    verbose: bool,
+
+    /// Save the raw snapshot (one JSON per line; gzip when the name ends in .gz)
+    #[arg(long, value_name = "FILE", conflicts_with = "from")]
+    save: Option<PathBuf>,
+
+    /// Analyze snapshots saved with --save, without touching the network
+    #[arg(long, value_name = "FILE", conflicts_with = "urls")]
+    from: Option<PathBuf>,
 
     /// User-Agent: hybrid (Chrome string plus insite), chrome, honest, or any text
     #[arg(long, default_value = "hybrid", value_name = "PROFILE")]
@@ -46,19 +92,69 @@ struct Args {
     /// embedded Mozilla roots (needed behind corporate TLS inspection)
     #[arg(long)]
     native_roots: bool,
+
+    /// Sites analyzed in parallel in batch mode
+    #[arg(short, long, default_value_t = 8, value_name = "N")]
+    concurrency: usize,
+}
+
+/// How reports are printed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    Terminal { color: bool, verbose: bool, width: usize },
+    Json { pretty: bool },
+    Ndjson,
+    Markdown,
 }
 
 fn main() -> ExitCode {
-    let args = Args::parse();
-    // Build the signature engine while the network works.
-    insite_core::detect::warm_up();
-    let target = match Target::parse(&args.url) {
-        Ok(t) => t,
+    let cli = Cli::parse();
+    if let Some(Command::Explain { id }) = cli.command {
+        return explain::run(id.as_deref());
+    }
+    let args = cli.args;
+
+    let selection = match args.modules.as_deref().map(Selection::parse).transpose() {
+        Ok(s) => s.unwrap_or_else(Selection::all),
         Err(e) => return usage_error(&e),
     };
+    let stdout_tty = std::io::stdout().is_terminal();
+    let format = if args.json {
+        Format::Json { pretty: stdout_tty }
+    } else if args.ndjson {
+        Format::Ndjson
+    } else if args.md {
+        Format::Markdown
+    } else {
+        Format::Terminal {
+            color: stdout_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+            verbose: args.verbose,
+            width: style::terminal_width(),
+        }
+    };
+
+    if let Some(path) = &args.from {
+        return snapshots::analyze_saved(path, selection, format);
+    }
+
     if !(args.timeout.is_finite() && args.timeout > 0.0) {
         return usage_error("--timeout must be a positive number of seconds");
     }
+    if args.concurrency == 0 {
+        return usage_error("--concurrency must be at least 1");
+    }
+    let inputs = if args.urls.is_empty() {
+        if std::io::stdin().is_terminal() {
+            return usage_error("give at least one URL, or a list on standard input (see --help)");
+        }
+        match read_list(std::io::stdin().lock()) {
+            Ok(list) if !list.is_empty() => list,
+            Ok(_) => return usage_error("standard input had no URLs"),
+            Err(e) => return usage_error(&format!("could not read standard input: {e}")),
+        }
+    } else {
+        args.urls.clone()
+    };
 
     let mut opts = Options::new(RequestProfile {
         user_agent: user_agent(&args.ua),
@@ -66,49 +162,38 @@ fn main() -> ExitCode {
         accept_encoding: ACCEPT_ENCODING_VALUE.to_owned(),
     });
     opts.timeout = Duration::from_secs_f64(args.timeout);
+    opts.fetch = Fetch::for_modules(selection);
     opts.proxy = match proxy_from_env() {
         Ok(p) => p,
         Err(e) => return usage_error(&e),
     };
-
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .worker_threads(4)
-        .enable_all()
-        .build()
-        .expect("tokio runtime");
-    let report = runtime.block_on(async {
-        let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], args.native_roots)?);
-        let snapshot = collector.collect(&target, &opts).await;
-        Ok::<_, String>(analyze::analyze(&snapshot))
-    });
-    let report = match report {
-        Ok(r) => r,
-        Err(e) => {
-            eprintln!("insite: {e}");
-            return ExitCode::from(2);
-        }
-    };
-
-    let stdout = std::io::stdout();
-    let tty = stdout.is_terminal();
-    let output = if args.json {
-        let json = if tty {
-            serde_json::to_string_pretty(&report)
-        } else {
-            serde_json::to_string(&report)
-        };
-        json.expect("reports always serialize") + "\n"
-    } else {
-        let color = tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty());
-        render::terminal(&report, color)
-    };
-    let _ = stdout.lock().write_all(output.as_bytes());
-    ExitCode::from(report.outcome.exit_code() as u8)
+    run::run(run::Plan {
+        inputs,
+        opts,
+        selection,
+        format,
+        save: args.save,
+        native_roots: args.native_roots,
+        concurrency: args.concurrency,
+    })
 }
 
-fn usage_error(message: &str) -> ExitCode {
+pub fn usage_error(message: &str) -> ExitCode {
     eprintln!("insite: {message}");
     ExitCode::from(2)
+}
+
+/// One URL per line; blank lines and `#` comments are skipped.
+fn read_list(input: impl BufRead) -> std::io::Result<Vec<String>> {
+    let mut list = Vec::new();
+    for line in input.lines() {
+        let line = line?;
+        let entry = line.split('#').next().unwrap_or_default().trim();
+        if !entry.is_empty() {
+            list.push(entry.to_owned());
+        }
+    }
+    Ok(list)
 }
 
 /// curl's conventions: `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, upper or lower case.
@@ -186,5 +271,17 @@ mod tests {
         assert!(!user_agent("chrome").contains("insite"));
         assert_eq!(user_agent("honest"), format!("insite/{VERSION}"));
         assert_eq!(user_agent("my-bot/1.0"), "my-bot/1.0");
+    }
+
+    #[test]
+    fn lists_skip_comments_and_blanks() {
+        let list = read_list("a.com\n\n  # comment\nb.com # trailing\n".as_bytes()).unwrap();
+        assert_eq!(list, ["a.com", "b.com"]);
+    }
+
+    #[test]
+    fn cli_definition_is_valid() {
+        use clap::CommandFactory;
+        Cli::command().debug_assert();
     }
 }
