@@ -43,6 +43,9 @@ pub struct ThirdParty {
     pub resources: usize,
     /// `script`, `stylesheet`, `image`, `iframe`.
     pub kinds: Vec<&'static str>,
+    /// Technologies whose detection evidence points at this domain.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub technologies: Vec<String>,
 }
 
 pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module<Weight> {
@@ -108,6 +111,7 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
             domain,
             resources: 0,
             kinds: Vec::new(),
+            technologies: Vec::new(),
         });
         party.resources += 1;
         if !party.kinds.contains(&kind) {

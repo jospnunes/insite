@@ -711,10 +711,15 @@ fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
             row(out, "iframes", &w.iframes.to_string());
         }
         for t in &w.third_parties {
+            let names = if t.technologies.is_empty() {
+                String::new()
+            } else {
+                format!(" · {}", t.technologies.join(", "))
+            };
             row(
                 out,
                 "third party",
-                &format!("{} · {} ({})", t.domain, t.resources, t.kinds.join(", ")),
+                &format!("{} · {} ({}){names}", t.domain, t.resources, t.kinds.join(", ")),
             );
         }
     }

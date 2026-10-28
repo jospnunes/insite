@@ -37,6 +37,11 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
             .filter(|h| !h.is_redirect() && snapshot.page.is_some())
             .map(|h| h.url.clone())
     });
+    let stack = run(selection, ModuleName::Stack, || stack::analyze(snapshot, &content));
+    let mut weight = run(selection, ModuleName::Weight, || weight::analyze(snapshot, &content));
+    if let (Some(w), Some(s)) = (weight.data.as_mut(), stack.data.as_ref()) {
+        name_third_parties(w, s);
+    }
     let modules = Modules {
         tls: run(selection, ModuleName::Tls, || tls::analyze(snapshot)),
         dns: run(selection, ModuleName::Dns, || dns::analyze(snapshot)),
@@ -44,9 +49,9 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
         security: run(selection, ModuleName::Security, || {
             security::analyze(snapshot, &content)
         }),
-        stack: run(selection, ModuleName::Stack, || stack::analyze(snapshot, &content)),
+        stack,
         seo: run(selection, ModuleName::Seo, || seo::analyze(snapshot, &content)),
-        weight: run(selection, ModuleName::Weight, || weight::analyze(snapshot, &content)),
+        weight,
         network,
     };
     let outcome = outcome(
@@ -84,6 +89,30 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
         ),
         modules,
     }
+}
+
+/// Names third-party domains after the technologies detected from them: a
+/// script from `www.googletagmanager.com` is Google Tag Manager.
+fn name_third_parties(weight: &mut weight::Weight, stack: &stack::Stack) {
+    for party in &mut weight.third_parties {
+        for tech in &stack.technologies {
+            let from_domain = tech.evidence.iter().any(|e| {
+                matches!(e.field, "scriptSrc" | "url" | "html" | "dom") && mentions_domain(&e.value, &party.domain)
+            });
+            if from_domain && !party.technologies.contains(&tech.name) {
+                party.technologies.push(tech.name.clone());
+            }
+        }
+    }
+}
+
+/// Whether `text` (often part of a URL) names `domain` on label boundaries.
+fn mentions_domain(text: &str, domain: &str) -> bool {
+    let label_char = |c: char| c.is_ascii_alphanumeric() || c == '-';
+    text.match_indices(domain).any(|(at, _)| {
+        !text[..at].chars().next_back().is_some_and(label_char)
+            && !text[at + domain.len()..].chars().next().is_some_and(label_char)
+    })
 }
 
 fn run<T>(selection: Selection, name: ModuleName, analyzer: impl FnOnce() -> Module<T>) -> Module<T> {
@@ -184,6 +213,20 @@ pub fn rfc3339(t: SystemTime) -> String {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn domains_are_matched_on_label_boundaries() {
+        assert!(mentions_domain(
+            "//www.googletagmanager.com/gtm.js",
+            "googletagmanager.com"
+        ));
+        assert!(mentions_domain("googletagmanager.com", "googletagmanager.com"));
+        assert!(!mentions_domain("notgoogletagmanager.com/x", "googletagmanager.com"));
+        assert!(!mentions_domain(
+            "googletagmanager.com-evil.net",
+            "googletagmanager.com"
+        ));
+    }
 
     #[test]
     fn panics_become_failed_modules() {
