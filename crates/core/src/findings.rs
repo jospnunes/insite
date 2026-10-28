@@ -51,6 +51,22 @@ catalog![
     "mail.dmarc.none",
     "mail.dmarc.invalid",
     "infra.challenge",
+    "seo.noindex",
+    "seo.robots.blocks_all",
+    "seo.title.missing",
+    "seo.title.length",
+    "seo.description.missing",
+    "seo.description.length",
+    "seo.canonical.multiple",
+    "seo.canonical.conflict",
+    "seo.viewport.missing",
+    "seo.lang.missing",
+    "seo.h1.missing",
+    "seo.images.alt",
+    "seo.sitemap.missing",
+    "weight.uncompressed",
+    "weight.render_blocking",
+    "weight.html_large",
 ];
 
 pub struct Entry<'a> {

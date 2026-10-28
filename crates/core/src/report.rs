@@ -7,7 +7,9 @@ use serde::Serialize;
 use crate::analyze::dns::Dns;
 use crate::analyze::infra::Infra;
 use crate::analyze::network::Network;
+use crate::analyze::seo::Seo;
 use crate::analyze::tls::Tls;
+use crate::analyze::weight::Weight;
 
 /// Semver: a new field bumps the minor version, a removal or type change the major.
 pub const SCHEMA_VERSION: &str = "0.1.0";
@@ -65,6 +67,8 @@ pub struct Modules {
     pub tls: Module<Tls>,
     pub dns: Module<Dns>,
     pub infra: Module<Infra>,
+    pub seo: Module<Seo>,
+    pub weight: Module<Weight>,
 }
 
 #[derive(Debug, Clone, Serialize)]

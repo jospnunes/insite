@@ -1,10 +1,13 @@
 //! Analysis: pure functions from `Snapshot` to `Report`. No network, no clock.
 
+pub mod content;
 pub mod dns;
 pub mod infra;
 pub mod network;
+pub mod seo;
 pub mod spf;
 pub mod tls;
+pub mod weight;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -20,6 +23,9 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
     let tls = tls::analyze(snapshot);
     let dns = dns::analyze(snapshot);
     let infra = infra::analyze(snapshot);
+    let content = content::content(snapshot);
+    let seo = seo::analyze(snapshot, &content);
+    let weight = weight::analyze(snapshot, &content);
     let outcome = outcome(
         snapshot,
         &[
@@ -27,6 +33,8 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
             ("tls", tls.status),
             ("dns", dns.status),
             ("infra", infra.status),
+            ("seo", seo.status),
+            ("weight", weight.status),
         ],
     );
 
@@ -49,6 +57,8 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
             tls,
             dns,
             infra,
+            seo,
+            weight,
         },
     }
 }
