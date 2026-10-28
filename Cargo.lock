@@ -1005,6 +1005,7 @@ dependencies = [
  "hyper-util",
  "idna",
  "insite-sigc",
+ "libc",
  "lol_html",
  "psl",
  "rcgen",

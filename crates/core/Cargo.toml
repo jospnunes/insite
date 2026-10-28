@@ -34,6 +34,9 @@ regex.workspace = true
 aho-corasick.workspace = true
 fancy-regex.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [build-dependencies]
 insite-sigc.workspace = true
 serde_json.workspace = true

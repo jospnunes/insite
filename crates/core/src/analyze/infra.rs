@@ -223,6 +223,7 @@ pub(crate) mod tests {
             failure: None,
             deadline_hit: false,
             interrupted: false,
+            browser: None,
             dns: Vec::new(),
             asn: None,
             auxiliary: Default::default(),

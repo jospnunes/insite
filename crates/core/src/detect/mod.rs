@@ -302,7 +302,7 @@ impl Engine {
         }
         if let Some(elements) = &inputs.elements {
             for &id in &self.dom {
-                self.try_dom(id, elements, inputs.has_browser, &mut hits);
+                self.try_dom(id, elements, inputs, &mut hits);
             }
         }
         self.resolve(hits)
@@ -342,9 +342,19 @@ impl Engine {
         }
     }
 
-    fn try_dom(&self, id: u32, elements: &ElementIndex, has_browser: bool, hits: &mut Hits) {
+    fn try_dom(&self, id: u32, elements: &ElementIndex, inputs: &Inputs, hits: &mut Hits) {
         let pattern = &self.index.patterns[id as usize];
         let Some(selector) = &pattern.key else { return };
+        // Element properties exist only in a browser, which read them for us.
+        if let Some(DomCheck::Property(name)) = &pattern.dom {
+            let values = inputs.dom_properties.get(&(selector.clone(), name.clone()));
+            for value in values.into_iter().flatten() {
+                if self.try_dom_value(id, pattern, selector, value, hits) {
+                    return;
+                }
+            }
+            return;
+        }
         let Some(list) = self.selectors[id as usize].get_or_init(|| insite_sigc::selector::parse(selector).ok()) else {
             return;
         };
@@ -356,31 +366,53 @@ impl Engine {
                     None => continue,
                 },
                 Some(DomCheck::Text) => element.text.clone(),
-                Some(DomCheck::Property(name)) if has_browser => match elements.property(element, name) {
-                    Some(v) => v,
-                    None => continue,
-                },
                 Some(DomCheck::Property(_)) => return,
                 Some(DomCheck::Exists) | None => String::new(),
             };
-            if let Some(groups) = self.matches(id, pattern, &value) {
-                let version = pattern.version.as_deref().map(|t| {
-                    let refs: Vec<Option<&str>> = groups.iter().map(|g| g.as_deref()).collect();
-                    resolve_version(t, &refs)
-                });
-                hits.add(
-                    pattern,
-                    id,
-                    version,
-                    Evidence {
-                        field: "dom",
-                        key: Some(selector.clone()),
-                        value: shorten(&value),
-                    },
-                );
+            // One matching element is enough.
+            if self.try_dom_value(id, pattern, selector, &value, hits) {
                 return;
             }
         }
+    }
+
+    /// Records a hit when `value` matches; returns whether it did.
+    fn try_dom_value(&self, id: u32, pattern: &Pattern, selector: &str, value: &str, hits: &mut Hits) -> bool {
+        let Some(groups) = self.matches(id, pattern, value) else {
+            return false;
+        };
+        let version = pattern.version.as_deref().map(|t| {
+            let refs: Vec<Option<&str>> = groups.iter().map(|g| g.as_deref()).collect();
+            resolve_version(t, &refs)
+        });
+        let evidence = Evidence {
+            field: "dom",
+            key: Some(selector.to_owned()),
+            value: shorten(value),
+        };
+        hits.add(pattern, id, version, evidence);
+        true
+    }
+
+    /// What a browser must read for the `js` and `dom` property signatures:
+    /// property paths, and selector and property pairs.
+    pub fn browser_queries(&self) -> (Vec<String>, Vec<(String, String)>) {
+        let mut js: Vec<String> = Vec::new();
+        let mut props: Vec<(String, String)> = Vec::new();
+        for p in &self.index.patterns {
+            match (p.field, &p.key, &p.dom) {
+                (Field::Js, Some(path), _) => js.push(path.clone()),
+                (Field::Dom, Some(selector), Some(DomCheck::Property(name))) => {
+                    props.push((selector.clone(), name.clone()))
+                }
+                _ => {}
+            }
+        }
+        js.sort();
+        js.dedup();
+        props.sort();
+        props.dedup();
+        (js, props)
     }
 
     /// Capture groups (group 0 is the whole match) when `value` matches, with an

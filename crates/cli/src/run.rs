@@ -7,13 +7,15 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use insite_core::analyze::analyze_selected;
+use insite_core::collect::browser::{Browser, Visit};
+use insite_core::collect::deadline::Deadline;
 use insite_core::collect::dns::Resolver;
 use insite_core::collect::records::registrable;
 use insite_core::collect::target::Target;
 use insite_core::collect::tls::Tls;
 use insite_core::collect::{Collector, Options};
-use insite_core::report::{ModuleName, Outcome, Report, Selection};
-use insite_core::snapshot::Snapshot;
+use insite_core::report::{Module, ModuleName, Outcome, Report, Selection};
+use insite_core::snapshot::{BrowserData, Snapshot};
 use tokio::sync::{Semaphore, mpsc};
 
 use crate::snapshots::Writer;
@@ -22,6 +24,8 @@ use crate::{Format, markdown, render};
 /// Analyses of the same registrable domain run one after the other, with this
 /// pause between them, so a host never sees more than one analysis at a time.
 const SAME_DOMAIN_PAUSE: Duration = Duration::from_secs(1);
+/// Browsers running at once in batch mode.
+const BROWSERS: usize = 2;
 
 pub struct Plan {
     pub inputs: Vec<String>,
@@ -31,6 +35,21 @@ pub struct Plan {
     pub save: Option<PathBuf>,
     pub native_roots: bool,
     pub concurrency: usize,
+    pub browser: Option<BrowserPlan>,
+}
+
+pub struct BrowserPlan {
+    pub visit: Visit,
+    /// From the start of each site's analysis.
+    pub timeout: Duration,
+    pub proxy: Option<String>,
+}
+
+/// A report ready to print: the fast one while the browser still works, or
+/// the complete one.
+enum Ready {
+    Fast(usize, Box<Report>),
+    Full(usize, Box<Snapshot>, Box<Report>),
 }
 
 pub fn run(mut plan: Plan) -> ExitCode {
@@ -39,6 +58,12 @@ pub fn run(mut plan: Plan) -> ExitCode {
         insite_core::detect::warm_up();
     }
     let mut printer = Printer::new(plan.format, plan.inputs.len());
+    // One site on an interactive terminal: the fast report first, the browser
+    // section when it is ready.
+    printer.progressive = plan.browser.is_some()
+        && plan.inputs.len() == 1
+        && matches!(plan.format, Format::Terminal { .. })
+        && std::io::stdout().is_terminal();
     let mut targets = Vec::new();
     for (i, input) in plan.inputs.iter().enumerate() {
         match Target::parse(input) {
@@ -78,11 +103,14 @@ pub fn run(mut plan: Plan) -> ExitCode {
             }
         });
         let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], plan.native_roots)?);
-        let (tx, mut rx) = mpsc::channel::<(usize, Snapshot, Report)>(plan.concurrency.max(1));
+        let (tx, mut rx) = mpsc::channel::<Ready>(plan.concurrency.max(1));
         let permits = Arc::new(Semaphore::new(plan.concurrency));
+        let browsers = Arc::new(Semaphore::new(BROWSERS));
         let opts = Arc::new(plan.opts);
+        let browser = plan.browser.map(Arc::new);
         for group in by_domain(targets) {
             let (collector, opts, permits, tx) = (collector.clone(), opts.clone(), permits.clone(), tx.clone());
+            let (browser, browsers) = (browser.clone(), browsers.clone());
             let selection = plan.selection;
             let stop = stop.clone();
             tokio::spawn(async move {
@@ -95,30 +123,73 @@ pub fn run(mut plan: Plan) -> ExitCode {
                     if *stop.borrow() {
                         return;
                     }
-                    let snapshot = collector.collect(&target, &opts).await;
+                    let t0 = tokio::time::Instant::now();
+                    // The browser process starts at t = 0, while the fast collection runs.
+                    let launch = browser.as_ref().map(|b| {
+                        let deadline = Deadline::new(t0 + b.timeout, Some(stop.clone()));
+                        let (proxy, browsers) = (b.proxy.clone(), browsers.clone());
+                        tokio::spawn(async move {
+                            let slot = browsers.acquire_owned().await.expect("the semaphore is never closed");
+                            (Browser::launch(proxy.as_deref(), &deadline).await, slot)
+                        })
+                    });
+                    let mut snapshot = collector.collect(&target, &opts).await;
                     drop(permit);
-                    // The analysis is CPU work: keep it off the IO threads.
-                    let analyzed = tokio::task::spawn_blocking(move || {
-                        let report = analyze_selected(&snapshot, selection);
-                        (snapshot, report)
-                    })
-                    .await;
-                    let Ok((snapshot, report)) = analyzed else { continue };
-                    if tx.send((index, snapshot, report)).await.is_err() {
+                    if let (Some(launch), Some(plan)) = (launch, browser.as_ref()) {
+                        if let Some((_, mut report)) = analyzed(snapshot.clone(), selection).await {
+                            report.modules.browser = Module::skipped("the browser is still loading the page");
+                            let _ = tx.send(Ready::Fast(index, Box::new(report))).await;
+                        }
+                        let deadline = Deadline::new(t0 + plan.timeout, Some(stop.clone()));
+                        // Where the fast collection ended, or the input when it did not.
+                        let url = match (snapshot.chain.last(), &snapshot.page) {
+                            (Some(hop), Some(_)) => hop.url.clone(),
+                            _ => target.url.to_string(),
+                        };
+                        snapshot.browser = Some(match launch.await {
+                            Ok((Ok(mut b), slot)) => {
+                                let data = b.visit(&url, &plan.visit, &deadline).await;
+                                b.close().await;
+                                drop(slot);
+                                data
+                            }
+                            Ok((Err(e), _)) => BrowserData {
+                                error: Some(e),
+                                ..BrowserData::default()
+                            },
+                            Err(e) => BrowserData {
+                                error: Some(e.to_string()),
+                                ..BrowserData::default()
+                            },
+                        });
+                    }
+                    let Some((snapshot, report)) = analyzed(snapshot, selection).await else {
+                        continue;
+                    };
+                    if tx
+                        .send(Ready::Full(index, Box::new(snapshot), Box::new(report)))
+                        .await
+                        .is_err()
+                    {
                         return;
                     }
                 }
             });
         }
         drop(tx);
-        while let Some((index, snapshot, report)) = rx.recv().await {
-            if let Some(writer) = save.as_mut()
-                && let Err(e) = writer.write(&snapshot)
-            {
-                eprintln!("insite: could not save the snapshot: {e}");
-                save = None;
+        while let Some(ready) = rx.recv().await {
+            match ready {
+                Ready::Fast(index, report) => printer.print_fast(index, &report),
+                Ready::Full(index, snapshot, report) => {
+                    if let Some(writer) = save.as_mut()
+                        && let Err(e) = writer.write(&snapshot)
+                    {
+                        eprintln!("insite: could not save the snapshot: {e}");
+                        save = None;
+                    }
+                    printer.print(index, &report);
+                }
             }
-            printer.print(index, &report);
         }
         Ok::<_, String>(())
     });
@@ -136,6 +207,16 @@ pub fn run(mut plan: Plan) -> ExitCode {
     }
     let code = printer.finish();
     if *stop.borrow() { ExitCode::from(130) } else { code }
+}
+
+/// The analysis is CPU work: it runs off the IO threads.
+async fn analyzed(snapshot: Snapshot, selection: Selection) -> Option<(Snapshot, Report)> {
+    tokio::task::spawn_blocking(move || {
+        let report = analyze_selected(&snapshot, selection);
+        (snapshot, report)
+    })
+    .await
+    .ok()
 }
 
 /// Targets grouped by registrable domain, groups in input order.
@@ -191,6 +272,11 @@ pub struct Printer {
     printed: usize,
     json: Vec<(usize, Report)>,
     pub exit: Exit,
+    /// Print the fast report, then only the browser's additions.
+    pub progressive: bool,
+    fast_printed: bool,
+    /// NDJSON lines carry a phase once a fast line was printed.
+    phased: bool,
 }
 
 impl Printer {
@@ -201,12 +287,41 @@ impl Printer {
             printed: 0,
             json: Vec::new(),
             exit: Exit::default(),
+            progressive: false,
+            fast_printed: false,
+            phased: false,
+        }
+    }
+
+    /// The report before the browser finished: shown on an interactive terminal
+    /// with one site, and as a `phase: fast` line in NDJSON.
+    pub fn print_fast(&mut self, _index: usize, report: &Report) {
+        match self.format {
+            Format::Terminal { color, verbose, width } if self.progressive => {
+                write_out(&render::terminal(report, color, verbose, width));
+                self.fast_printed = true;
+            }
+            Format::Ndjson => {
+                let mut report = report.clone();
+                report.phase = Some("fast");
+                write_out(&(serde_json::to_string(&report).expect("reports serialize") + "\n"));
+                self.phased = true;
+            }
+            _ => {}
         }
     }
 
     pub fn print(&mut self, index: usize, report: &Report) {
         self.exit.record(&report.outcome);
         let text = match self.format {
+            Format::Terminal { color, verbose, width } if self.fast_printed => {
+                render::browser_update(report, color, verbose, width)
+            }
+            Format::Ndjson if self.phased => {
+                let mut report = report.clone();
+                report.phase = Some("full");
+                serde_json::to_string(&report).expect("reports serialize") + "\n"
+            }
             Format::Terminal { color, verbose, width } => {
                 let separator = if self.printed > 0 { "\n" } else { "" };
                 format!("{separator}{}", render::terminal(report, color, verbose, width))

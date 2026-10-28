@@ -1,6 +1,7 @@
 //! Collection: everything that touches the network. Produces a `Snapshot`.
 
 pub mod asn;
+pub mod browser;
 pub mod connect;
 pub mod deadline;
 pub mod dns;
@@ -304,6 +305,7 @@ impl Collector {
             failure,
             deadline_hit,
             interrupted: deadline.interrupted(),
+            browser: None,
             dns,
             asn,
             auxiliary: auxiliary.unwrap_or_default(),

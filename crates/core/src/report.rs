@@ -4,6 +4,7 @@ use std::collections::BTreeMap;
 
 use serde::Serialize;
 
+use crate::analyze::browser::Browser;
 use crate::analyze::dns::Dns;
 use crate::analyze::infra::Infra;
 use crate::analyze::network::Network;
@@ -28,6 +29,10 @@ pub struct Report {
     pub outcome: Outcome,
     /// Reference data the analysis used, with versions, so results can be traced.
     pub sources: Vec<DataSource>,
+    /// With `--browser` in NDJSON: `fast` for the report printed before the
+    /// browser finished, `full` for the complete one.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<&'static str>,
     pub modules: Modules,
 }
 
@@ -82,6 +87,7 @@ pub struct Modules {
     pub stack: Module<Stack>,
     pub seo: Module<Seo>,
     pub weight: Module<Weight>,
+    pub browser: Module<Browser>,
 }
 
 /// The modules of a report, in report order.
@@ -96,10 +102,11 @@ pub enum ModuleName {
     Stack,
     Seo,
     Weight,
+    Browser,
 }
 
 impl ModuleName {
-    pub const ALL: [ModuleName; 8] = [
+    pub const ALL: [ModuleName; 9] = [
         ModuleName::Network,
         ModuleName::Tls,
         ModuleName::Dns,
@@ -108,6 +115,7 @@ impl ModuleName {
         ModuleName::Stack,
         ModuleName::Seo,
         ModuleName::Weight,
+        ModuleName::Browser,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -120,6 +128,7 @@ impl ModuleName {
             ModuleName::Stack => "stack",
             ModuleName::Seo => "seo",
             ModuleName::Weight => "weight",
+            ModuleName::Browser => "browser",
         }
     }
 
@@ -132,26 +141,26 @@ impl ModuleName {
 
 /// A set of modules, as chosen with `-m`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Selection(u8);
+pub struct Selection(u16);
 
 impl Selection {
     pub fn all() -> Self {
-        Selection(u8::MAX)
+        Selection(u16::MAX)
     }
 
     pub fn contains(self, module: ModuleName) -> bool {
-        self.0 & 1 << module as u8 != 0
+        self.0 & 1 << module as u16 != 0
     }
 
     /// A comma-separated list such as `tls,dns`.
     pub fn parse(list: &str) -> Result<Self, String> {
-        let mut bits = 0u8;
+        let mut bits = 0u16;
         for name in list.split(',').filter(|n| !n.trim().is_empty()) {
             let module = ModuleName::parse(name).ok_or_else(|| {
                 let known: Vec<&str> = ModuleName::ALL.iter().map(|m| m.as_str()).collect();
                 format!("unknown module `{}` (known: {})", name.trim(), known.join(", "))
             })?;
-            bits |= 1 << module as u8;
+            bits |= 1 << module as u16;
         }
         if bits == 0 {
             return Err("no module chosen".into());

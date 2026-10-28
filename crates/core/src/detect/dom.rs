@@ -13,8 +13,6 @@ pub struct ElementIndex<'a> {
     by_id: HashMap<&'a str, Vec<usize>>,
     by_class: HashMap<&'a str, Vec<usize>>,
     by_tag: HashMap<&'a str, Vec<usize>>,
-    /// Element properties read by the browser, keyed by element position.
-    properties: HashMap<(usize, String), String>,
 }
 
 impl<'a> ElementIndex<'a> {
@@ -24,7 +22,6 @@ impl<'a> ElementIndex<'a> {
             by_id: HashMap::new(),
             by_class: HashMap::new(),
             by_tag: HashMap::new(),
-            properties: HashMap::new(),
         };
         for (i, element) in elements.iter().enumerate() {
             index.by_tag.entry(element.tag.as_str()).or_default().push(i);
@@ -41,16 +38,6 @@ impl<'a> ElementIndex<'a> {
             }
         }
         index
-    }
-
-    pub fn with_properties(mut self, properties: HashMap<(usize, String), String>) -> Self {
-        self.properties = properties;
-        self
-    }
-
-    pub fn property(&self, element: &Element, name: &str) -> Option<String> {
-        let position = self.elements.iter().position(|e| std::ptr::eq(e, element))?;
-        self.properties.get(&(position, name.to_owned())).cloned()
     }
 
     /// Elements matching any selector of the list, in document order.

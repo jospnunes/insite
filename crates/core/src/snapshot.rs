@@ -46,6 +46,66 @@ pub struct Snapshot {
     pub asn: Option<AsnLookup>,
     /// robots.txt, security.txt and the sitemap of the final origin.
     pub auxiliary: Auxiliary,
+    /// What a headless browser saw, with `--browser`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub browser: Option<BrowserData>,
+}
+
+/// The page as a browser loaded it.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BrowserData {
+    /// As the browser reports it, e.g. `HeadlessChrome/153.0.8010.12`.
+    pub product: String,
+    pub executable: String,
+    pub mobile: bool,
+    /// Lighthouse's mobile throttling was applied.
+    pub throttled: bool,
+    pub user_agent: String,
+    /// Where the browser ended up.
+    pub url: String,
+    /// The DOM as JavaScript left it, serialized, at most 5 MB.
+    pub html: Option<String>,
+    pub html_truncated: bool,
+    pub metrics: Option<BrowserMetrics>,
+    pub resources: Vec<BrowserResource>,
+    /// Exceptions, `console.error` calls and resource errors.
+    pub console: Vec<String>,
+    /// Property paths of the `js` signatures that exist, with their values
+    /// (empty for objects and functions).
+    pub js: Vec<(String, String)>,
+    /// Selector, element property and the values found (at most five).
+    pub dom_properties: Vec<(String, String, Vec<String>)>,
+    /// The page went quiet after `load`; false when it was read at the cap.
+    pub quiet: bool,
+    /// From navigation start to the `load` event, in milliseconds.
+    pub load_ms: Option<f64>,
+    pub error: Option<String>,
+    pub warnings: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BrowserMetrics {
+    pub fcp_ms: Option<f64>,
+    pub lcp_ms: Option<f64>,
+    pub cls: f64,
+    /// Long tasks after FCP, beyond 50 ms each, until the page went quiet.
+    pub tbt_ms: f64,
+    pub long_tasks: usize,
+    pub dom_content_loaded_ms: Option<f64>,
+    pub load_ms: Option<f64>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct BrowserResource {
+    pub url: String,
+    /// CDP resource type: Document, Script, Stylesheet, Image, Font, XHR, Fetch...
+    pub kind: String,
+    pub status: Option<u16>,
+    pub mime: Option<String>,
+    /// Bytes on the wire, headers included.
+    pub transferred: u64,
+    pub from_cache: bool,
+    pub failed: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

@@ -78,6 +78,23 @@ struct Args {
     #[arg(short, long, default_value_t = 5.0, value_name = "SECONDS")]
     timeout: f64,
 
+    /// Also load the page in a headless Chrome: Core Web Vitals, every
+    /// resource, console errors, and the stack JavaScript reveals
+    #[arg(short, long)]
+    browser: bool,
+
+    /// Core Web Vitals comparable to Lighthouse's mobile throttling (implies --browser)
+    #[arg(long)]
+    throttle: bool,
+
+    /// Emulate a desktop instead of a phone in the browser
+    #[arg(long)]
+    desktop: bool,
+
+    /// Deadline for the browser, from the start (default 20 s, 60 s with --throttle)
+    #[arg(long, value_name = "SECONDS")]
+    browser_timeout: Option<f64>,
+
     /// Show every section in full, with evidence
     #[arg(short, long)]
     verbose: bool,
@@ -181,6 +198,33 @@ fn main() -> ExitCode {
         Ok(p) => p,
         Err(e) => return usage_error(&e),
     };
+    let browser_wanted = args.browser
+        || args.throttle
+        || args
+            .modules
+            .as_deref()
+            .is_some_and(|m| m.split(',').any(|n| n.trim().eq_ignore_ascii_case("browser")));
+    let browser = if browser_wanted {
+        let timeout = args.browser_timeout.unwrap_or(if args.throttle { 60.0 } else { 20.0 });
+        if !(timeout.is_finite() && timeout > 0.0) {
+            return usage_error("--browser-timeout must be a positive number of seconds");
+        }
+        let (js_paths, dom_properties) = insite_core::detect::engine().browser_queries();
+        Some(run::BrowserPlan {
+            visit: insite_core::collect::browser::Visit {
+                mobile: !args.desktop,
+                throttle: args.throttle,
+                user_agent_suffix: matches!(args.ua.as_str(), "hybrid" | "honest").then(|| format!("insite/{VERSION}")),
+                accept_language: opts.request.accept_language.clone(),
+                js_paths,
+                dom_properties,
+            },
+            timeout: Duration::from_secs_f64(timeout),
+            proxy: browser_proxy(),
+        })
+    } else {
+        None
+    };
     run::run(run::Plan {
         inputs,
         opts,
@@ -189,6 +233,7 @@ fn main() -> ExitCode {
         save: args.save,
         native_roots: args.native_roots,
         concurrency: args.concurrency,
+        browser,
     })
 }
 
@@ -222,6 +267,23 @@ pub fn proxy_from_env() -> Result<ProxyConfig, String> {
         var("HTTP_PROXY").as_deref(),
         var("NO_PROXY").as_deref(),
     )
+}
+
+/// The proxy for the browser, from `HTTPS_PROXY`. Chrome takes no credentials
+/// on the command line, so a proxy that needs them is left out, with a warning.
+fn browser_proxy() -> Option<String> {
+    let value = std::env::var("HTTPS_PROXY")
+        .or_else(|_| std::env::var("https_proxy"))
+        .ok()?;
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    if value.contains('@') {
+        eprintln!("insite: the browser cannot use a proxy with credentials; it connects directly");
+        return None;
+    }
+    Some(value.to_owned())
 }
 
 fn user_agent(profile: &str) -> String {

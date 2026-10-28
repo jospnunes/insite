@@ -1,5 +1,7 @@
 //! What the signatures look at, gathered from the snapshot and the page facts.
 
+use std::collections::HashMap;
+
 use insite_sigc::index::Field;
 
 use super::dom::ElementIndex;
@@ -26,7 +28,8 @@ pub struct Inputs<'a> {
     pub cert_issuer: Option<String>,
     pub xhr: Vec<String>,
     pub elements: Option<ElementIndex<'a>>,
-    pub has_browser: bool,
+    /// Element property values a browser read, by selector and property.
+    pub dom_properties: HashMap<(String, String), Vec<String>>,
 }
 
 impl Inputs<'_> {

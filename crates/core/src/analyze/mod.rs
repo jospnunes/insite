@@ -1,5 +1,6 @@
 //! Analysis: pure functions from `Snapshot` to `Report`. No network, no clock.
 
+pub mod browser;
 pub mod content;
 pub mod dns;
 pub mod infra;
@@ -50,6 +51,7 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
             security::analyze(snapshot, &content)
         }),
         stack,
+        browser: run(selection, ModuleName::Browser, || browser::analyze(snapshot)),
         seo: run(selection, ModuleName::Seo, || seo::analyze(snapshot, &content)),
         weight,
         network,
@@ -65,6 +67,7 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
             ("stack", modules.stack.status),
             ("seo", modules.seo.status),
             ("weight", modules.weight.status),
+            ("browser", modules.browser.status),
         ],
     );
 
@@ -82,6 +85,7 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
         started_at: rfc3339(snapshot.collected_at),
         duration_ms: network::ms(snapshot.duration),
         outcome,
+        phase: None,
         sources: crate::data::sources(
             selection
                 .contains(ModuleName::Stack)

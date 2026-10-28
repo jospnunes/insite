@@ -107,6 +107,11 @@ catalog![
     "sec.version_leak",
     "sec.permissions_policy.missing",
     "sec.security_txt.expired",
+    "perf.lcp.poor",
+    "perf.cls.poor",
+    "perf.tbt.poor",
+    "browser.console_errors",
+    "browser.requests_failed",
 ];
 
 pub struct Entry<'a> {

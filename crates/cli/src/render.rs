@@ -217,8 +217,156 @@ pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static 
     }) {
         lines.push(("weight", text));
     }
-
+    let still_loading = m.browser.reason.as_deref() == Some(STILL_LOADING);
+    if (m.browser.status != Status::Skipped || still_loading)
+        && let Some(text) = summary(&m.browser, s, |b| browser_line(b, s))
+    {
+        {
+            lines.push((
+                "browser",
+                if still_loading {
+                    s.dim("loading the page…")
+                } else {
+                    text
+                },
+            ));
+        }
+    }
     lines
+}
+
+/// What the fast phase says while the browser works.
+const STILL_LOADING: &str = "the browser is still loading the page";
+
+fn browser_line(b: &insite_core::analyze::browser::Browser, s: &Style) -> String {
+    let mut parts: Vec<String> = b
+        .metrics
+        .iter()
+        .filter(|m| m.name != "fcp")
+        .map(|m| {
+            let text = format!("{} {}", m.name.to_uppercase(), metric_value(m.name, m.value));
+            match m.rating {
+                "good" => s.green(&text),
+                "needs_improvement" => s.yellow(&text),
+                _ => s.red(&text),
+            }
+        })
+        .collect();
+    parts.push(format!("{} requests, {}", b.requests, bytes(b.transferred_bytes)));
+    if b.third_party_bytes > 0 {
+        parts.push(format!("{:.0}% third-party", b.third_party_share * 100.0));
+    }
+    parts.push(s.dim(&b.profile));
+    parts.join(" · ")
+}
+
+fn metric_value(name: &str, value: f64) -> String {
+    match name {
+        "cls" => format!("{value:.2}"),
+        "tbt" => format!("{value:.0} ms"),
+        _ => format!("{:.1} s", value / 1000.0),
+    }
+}
+
+/// After a progressive fast report: the browser line, the stack as the browser
+/// completed it, and the browser's findings.
+pub fn browser_update(report: &Report, color: bool, verbose: bool, width: usize) -> String {
+    let s = Style::new(color);
+    let mut out = String::from("\n");
+    for (label, text) in summary_lines(report, &s, width) {
+        if label == "browser" || label == "stack" {
+            let _ = writeln!(out, "{}{}", s.bold(&format!("{label:<LABEL$}")), text);
+        }
+    }
+    if verbose {
+        browser_details(&mut out, report, &s, width);
+    }
+    let findings: Vec<&Finding> = report
+        .modules
+        .browser
+        .findings
+        .iter()
+        .filter(|f| verbose || f.severity > Severity::Info)
+        .collect();
+    if !findings.is_empty() {
+        out.push('\n');
+        for f in findings {
+            let _ = writeln!(
+                out,
+                "  {}{}  {}",
+                s.dim(&format!("{:<8}", severity(f.severity))),
+                f.title,
+                s.dim(f.id)
+            );
+        }
+    }
+    if let Some(reason) = report
+        .modules
+        .browser
+        .reason
+        .as_deref()
+        .filter(|_| report.modules.browser.status != Status::Ok)
+    {
+        let _ = writeln!(out, "\n{}", s.yellow(&format!("browser: {reason}")));
+    }
+    out
+}
+
+fn browser_details(out: &mut String, report: &Report, s: &Style, width: usize) {
+    let Some(b) = &report.modules.browser.data else { return };
+    let row = |out: &mut String, key: &str, value: &str| {
+        if !value.is_empty() {
+            let _ = writeln!(
+                out,
+                "  {}{}",
+                s.dim(&format!("{key:<13}")),
+                indent(value, 15, width).trim_start()
+            );
+        }
+    };
+    let _ = writeln!(out, "\n{}", s.bold("browser"));
+    row(out, "browser", &format!("{} ({})", b.product, b.profile));
+    row(out, "page", &b.url);
+    for m in &b.metrics {
+        row(
+            out,
+            &m.name.to_uppercase(),
+            &format!("{} ({})", metric_value(m.name, m.value), m.rating.replace('_', " ")),
+        );
+    }
+    if let Some(load) = b.load_ms {
+        row(out, "load event", &format!("{} ms", ms(load)));
+    }
+    let types: Vec<String> = b
+        .by_type
+        .iter()
+        .map(|t| format!("{} {} ({})", t.kind, t.count, bytes(t.bytes)))
+        .collect();
+    row(out, "requests", &format!("{} · {}", b.requests, types.join(", ")));
+    for h in &b.heaviest {
+        row(
+            out,
+            "heavy",
+            &format!("{} · {} · {}", bytes(h.bytes), h.kind, clip(&h.url, 100)),
+        );
+    }
+    if b.third_party_bytes > 0 {
+        row(
+            out,
+            "third-party",
+            &format!("{} ({:.0}%)", bytes(b.third_party_bytes), b.third_party_share * 100.0),
+        );
+    }
+    for f in &b.failed {
+        row(out, "failed", f);
+    }
+    for c in &b.console_errors {
+        row(out, "console", c);
+    }
+    if let Some(r) = report.modules.stack.data.as_ref().and_then(|st| st.rendered.as_ref()) {
+        let names: Vec<String> = r.technologies.iter().map(|t| t.name.clone()).collect();
+        row(out, "stack", &format!("{} → {}", r.url, names.join(", ")));
+    }
 }
 
 /// The module's summary text, or its status when it did not run normally.
@@ -659,6 +807,8 @@ fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
             );
         }
     }
+
+    browser_details(out, report, s, width);
 
     if let Some(w) = &m.weight.data {
         section(out, "weight", m.weight.status, m.weight.reason.as_deref());
