@@ -4,6 +4,7 @@
 pub mod analyze;
 pub mod collect;
 pub mod data;
+pub mod detect;
 pub mod extract;
 pub mod findings;
 pub mod report;

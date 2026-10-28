@@ -50,6 +50,8 @@ struct Args {
 
 fn main() -> ExitCode {
     let args = Args::parse();
+    // Build the signature engine while the network works.
+    insite_core::detect::warm_up();
     let target = match Target::parse(&args.url) {
         Ok(t) => t,
         Err(e) => return usage_error(&e),

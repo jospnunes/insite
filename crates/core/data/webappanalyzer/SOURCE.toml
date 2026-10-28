@@ -1,0 +1,4 @@
+source = "enthec/webappanalyzer@d91f7e510e93457041bea874e8a9ffb011e3e4fe"
+date = "2026-10-19"
+url = "https://github.com/enthec/webappanalyzer"
+license = "GPL-3.0"

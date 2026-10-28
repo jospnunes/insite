@@ -49,6 +49,8 @@ pub struct PageFacts {
     pub elements: Vec<Element>,
     /// Characters of the decoded document.
     pub html_chars: usize,
+    /// The decoded document, for signatures that match raw HTML.
+    pub html: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize)]
@@ -189,6 +191,7 @@ pub fn extract(body: &[u8], content_type: Option<&str>, page_url: &Url) -> PageF
     facts.charset_source = charset_source;
     facts.elements = state.elements;
     facts.html_chars = text.chars().count();
+    facts.html = text.into_owned();
     facts
 }
 

@@ -327,7 +327,12 @@ signals = [
 
 [[challenge]]
 name = "Akamai"
-signals = [{ status = [403], header = "server", value = "akamaighost", body = "Reference&#32;&#35;" }]
+signals = [
+  { status = [403], header = "server", value = "akamaighost", body = "Reference&#32;&#35;" },
+  # Akamai Bot Manager's interstitial challenge, served with status 200.
+  { body = "sec-if-cpt-container" },
+  { body = "/_sec/cp_challenge/" },
+]
 
 [[challenge]]
 name = "Imperva"

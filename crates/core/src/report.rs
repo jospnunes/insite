@@ -8,6 +8,7 @@ use crate::analyze::dns::Dns;
 use crate::analyze::infra::Infra;
 use crate::analyze::network::Network;
 use crate::analyze::seo::Seo;
+use crate::analyze::stack::Stack;
 use crate::analyze::tls::Tls;
 use crate::analyze::weight::Weight;
 
@@ -67,6 +68,7 @@ pub struct Modules {
     pub tls: Module<Tls>,
     pub dns: Module<Dns>,
     pub infra: Module<Infra>,
+    pub stack: Module<Stack>,
     pub seo: Module<Seo>,
     pub weight: Module<Weight>,
 }

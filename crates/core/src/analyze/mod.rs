@@ -6,6 +6,7 @@ pub mod infra;
 pub mod network;
 pub mod seo;
 pub mod spf;
+pub mod stack;
 pub mod tls;
 pub mod weight;
 
@@ -26,6 +27,7 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
     let content = content::content(snapshot);
     let seo = seo::analyze(snapshot, &content);
     let weight = weight::analyze(snapshot, &content);
+    let stack = stack::analyze(snapshot, &content);
     let outcome = outcome(
         snapshot,
         &[
@@ -35,6 +37,7 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
             ("infra", infra.status),
             ("seo", seo.status),
             ("weight", weight.status),
+            ("stack", stack.status),
         ],
     );
 
@@ -57,6 +60,7 @@ pub fn analyze(snapshot: &Snapshot) -> Report {
             tls,
             dns,
             infra,
+            stack,
             seo,
             weight,
         },

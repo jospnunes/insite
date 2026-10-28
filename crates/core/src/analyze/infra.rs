@@ -253,6 +253,13 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn akamai_bot_manager_interstitial() {
+        let page = r#"<html><body><script src="/GcDj/x?v=1"></script><div id="sec-if-cpt-container" role="main">"#;
+        let snap = snapshot_with(200, &[("x-akamai-transformed", "0 - 0 -")], page);
+        assert_eq!(challenge(&snap).unwrap().name, "Akamai");
+    }
+
+    #[test]
     fn body_markers_need_the_status_too() {
         let page = r#"<script src="/cdn-cgi/challenge-platform/h/b/orchestrate"></script>"#;
         let ok = snapshot_with(200, &[("server", "cloudflare")], page);

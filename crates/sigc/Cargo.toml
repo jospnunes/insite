@@ -1,0 +1,14 @@
+[package]
+name = "insite-sigc"
+description = "Compiles webappanalyzer technology signatures into the insite detection index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+regex-syntax.workspace = true
+fancy-regex.workspace = true
+regex.workspace = true

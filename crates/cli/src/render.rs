@@ -48,12 +48,37 @@ pub fn terminal(report: &Report, color: bool) -> String {
         headline(&mut out, &s, &host, net);
     }
 
+    if let Some(stack) = &report.modules.stack.data {
+        let names: Vec<String> = stack
+            .technologies
+            .iter()
+            .map(|t| {
+                let mut name = t.name.clone();
+                if let Some(v) = &t.version {
+                    name.push(' ');
+                    name.push_str(v);
+                }
+                if t.confidence < 100 {
+                    name.push('?');
+                }
+                name
+            })
+            .collect();
+        if !names.is_empty() {
+            let _ = writeln!(out, "\n{}  {}", s.bold("stack"), names.join(" · "));
+        }
+    }
+
     let findings: Vec<_> = report
         .modules
         .network
         .findings
         .iter()
         .chain(&report.modules.tls.findings)
+        .chain(&report.modules.dns.findings)
+        .chain(&report.modules.infra.findings)
+        .chain(&report.modules.seo.findings)
+        .chain(&report.modules.weight.findings)
         .collect();
     if !findings.is_empty() {
         out.push('\n');
