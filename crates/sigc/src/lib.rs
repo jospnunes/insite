@@ -394,6 +394,46 @@ pub fn resolve_version(template: &str, groups: &[Option<&str>]) -> String {
 mod tests {
     use super::*;
 
+    fn index_of(techs: &str, source: &str) -> Index {
+        let categories = r#"{"1": {"name": "CMS", "priority": 1}, "2": {"name": "Other", "priority": 9}}"#;
+        let sources = Sources {
+            technologies: vec![techs],
+            categories,
+            source: source.into(),
+            source_date: "2026-01-01".into(),
+        };
+        compile(&sources).unwrap().0
+    }
+
+    #[test]
+    fn custom_signatures_override_by_name() {
+        let mut base = index_of(
+            r#"{"Alpha": {"cats": [1], "headers": {"x-alpha": ""}}, "Beta": {"cats": [1], "html": "beta-marker"}}"#,
+            "base",
+        );
+        let custom = index_of(
+            r#"{"Beta": {"cats": [2], "html": "new-beta"}, "Gamma": {"cats": [2], "html": "gamma-marker"}}"#,
+            "custom",
+        );
+        base.merge(custom);
+        let names: Vec<&str> = base.techs.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Alpha", "Beta", "Gamma"]);
+        let beta = 1;
+        let beta_patterns: Vec<&Pattern> = base.patterns.iter().filter(|p| p.tech == beta).collect();
+        assert_eq!(beta_patterns.len(), 1);
+        assert_eq!(beta_patterns[0].regex.as_deref(), Some("new-beta"));
+        assert_eq!(base.techs[1].cats, [2]);
+        assert!(
+            base.patterns
+                .iter()
+                .any(|p| p.tech == 2 && p.regex.as_deref() == Some("gamma-marker"))
+        );
+        // Categories survive a round trip through categories_json.
+        let again = parse_categories(&base.categories_json()).unwrap();
+        assert_eq!(again.len(), 2);
+        assert_eq!(again[1].name, "Other");
+    }
+
     #[test]
     fn splits_pattern_metadata() {
         assert_eq!(

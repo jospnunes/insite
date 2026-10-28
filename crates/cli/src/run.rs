@@ -33,7 +33,7 @@ pub struct Plan {
     pub concurrency: usize,
 }
 
-pub fn run(plan: Plan) -> ExitCode {
+pub fn run(mut plan: Plan) -> ExitCode {
     if plan.selection.contains(ModuleName::Stack) {
         // Builds the signature engine while the network works.
         insite_core::detect::warm_up();
@@ -63,7 +63,20 @@ pub fn run(plan: Plan) -> ExitCode {
         .build()
         .expect("tokio runtime");
     let started = Instant::now();
+    let (stop_tx, stop) = tokio::sync::watch::channel(false);
+    plan.opts.stop = Some(stop.clone());
     let result = runtime.block_on(async {
+        // First Ctrl-C: close every snapshot with what has arrived and print the
+        // reports. Second: quit at once.
+        tokio::spawn(async move {
+            if tokio::signal::ctrl_c().await.is_ok() {
+                eprintln!("\ninsite: interrupted; printing what arrived (Ctrl-C again to quit)");
+                let _ = stop_tx.send(true);
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    std::process::exit(130);
+                }
+            }
+        });
         let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], plan.native_roots)?);
         let (tx, mut rx) = mpsc::channel::<(usize, Snapshot, Report)>(plan.concurrency.max(1));
         let permits = Arc::new(Semaphore::new(plan.concurrency));
@@ -71,12 +84,17 @@ pub fn run(plan: Plan) -> ExitCode {
         for group in by_domain(targets) {
             let (collector, opts, permits, tx) = (collector.clone(), opts.clone(), permits.clone(), tx.clone());
             let selection = plan.selection;
+            let stop = stop.clone();
             tokio::spawn(async move {
                 for (n, (index, target)) in group.into_iter().enumerate() {
                     if n > 0 {
                         tokio::time::sleep(SAME_DOMAIN_PAUSE).await;
                     }
                     let permit = permits.acquire().await.expect("the semaphore is never closed");
+                    // Sites not started before an interruption are not started at all.
+                    if *stop.borrow() {
+                        return;
+                    }
                     let snapshot = collector.collect(&target, &opts).await;
                     drop(permit);
                     // The analysis is CPU work: keep it off the IO threads.
@@ -116,7 +134,8 @@ pub fn run(plan: Plan) -> ExitCode {
     if plan.inputs.len() > 1 && std::io::stderr().is_terminal() {
         eprintln!("{}", printer.summary(started.elapsed()));
     }
-    printer.finish()
+    let code = printer.finish();
+    if *stop.borrow() { ExitCode::from(130) } else { code }
 }
 
 /// Targets grouped by registrable domain, groups in input order.

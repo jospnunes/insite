@@ -18,6 +18,54 @@ pub struct Index {
     pub patterns: Vec<Pattern>,
 }
 
+impl Index {
+    /// Adds `other`'s technologies, replacing ours of the same name: custom
+    /// signatures override the base ones. Categories are merged by id.
+    pub fn merge(&mut self, other: Index) {
+        for category in other.categories {
+            if !self.categories.iter().any(|c| c.id == category.id) {
+                self.categories.push(category);
+            }
+        }
+        self.categories.sort_by_key(|c| c.id);
+        let mut ids = Vec::with_capacity(other.techs.len());
+        for tech in other.techs {
+            match self.techs.iter().position(|t| t.name == tech.name) {
+                Some(i) => {
+                    let id = i as u32;
+                    self.patterns.retain(|p| p.tech != id);
+                    self.techs[i] = tech;
+                    ids.push(id);
+                }
+                None => {
+                    ids.push(self.techs.len() as u32);
+                    self.techs.push(tech);
+                }
+            }
+        }
+        for mut pattern in other.patterns {
+            pattern.tech = ids[pattern.tech as usize];
+            self.patterns.push(pattern);
+        }
+    }
+
+    /// The categories as a `categories.json` document, to compile custom
+    /// signatures against the same ids.
+    pub fn categories_json(&self) -> String {
+        let map: serde_json::Map<String, serde_json::Value> = self
+            .categories
+            .iter()
+            .map(|c| {
+                (
+                    c.id.to_string(),
+                    serde_json::json!({ "name": c.name, "priority": c.priority }),
+                )
+            })
+            .collect();
+        serde_json::Value::Object(map).to_string()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Category {
     pub id: u32,

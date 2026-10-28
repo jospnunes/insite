@@ -222,6 +222,7 @@ pub(crate) mod tests {
             https_fallback: None,
             failure: None,
             deadline_hit: false,
+            interrupted: false,
             dns: Vec::new(),
             asn: None,
             auxiliary: Default::default(),

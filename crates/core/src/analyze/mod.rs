@@ -77,7 +77,11 @@ pub fn analyze_selected(snapshot: &Snapshot, selection: Selection) -> Report {
         started_at: rfc3339(snapshot.collected_at),
         duration_ms: network::ms(snapshot.duration),
         outcome,
-        sources: crate::data::sources(),
+        sources: crate::data::sources(
+            selection
+                .contains(ModuleName::Stack)
+                .then(|| crate::detect::engine().provenance()),
+        ),
         modules,
     }
 }
@@ -141,7 +145,9 @@ fn outcome(snapshot: &Snapshot, modules: &[(&str, Status)]) -> Outcome {
     if snapshot.page.as_ref().is_some_and(|p| p.truncated) {
         reasons.push("the page body was cut".to_owned());
     }
-    if snapshot.deadline_hit && !reasons.iter().any(|r| r.contains("deadline")) {
+    if snapshot.interrupted {
+        reasons.push("interrupted before collection finished".to_owned());
+    } else if snapshot.deadline_hit && !reasons.iter().any(|r| r.contains("deadline")) {
         reasons.push("deadline reached before collection finished".to_owned());
     }
     if reasons.is_empty() {

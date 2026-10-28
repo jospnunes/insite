@@ -2,6 +2,7 @@
 
 pub mod asn;
 pub mod connect;
+pub mod deadline;
 pub mod dns;
 pub mod http;
 pub mod proxy;
@@ -24,6 +25,7 @@ use crate::snapshot::{
     AuxFile, Auxiliary, ConnectionInfo, ConnectionUse, DomainRecords, DomainRole, FailureKind, FetchFailure, Hop,
     HttpCheck, HttpVersion, Page, RequestProfile, SNAPSHOT_VERSION, Snapshot,
 };
+use deadline::Deadline;
 use dns::{Resolved, Resolver};
 use http::Sender;
 use proxy::ProxyConfig;
@@ -54,6 +56,9 @@ pub struct Options {
     pub default_ports: Ports,
     pub proxy: ProxyConfig,
     pub fetch: Fetch,
+    /// Turns true to stop collecting (Ctrl-C): the snapshot then closes with
+    /// what has arrived, as when the deadline passes.
+    pub stop: Option<tokio::sync::watch::Receiver<bool>>,
 }
 
 /// Which optional pieces to collect; `-m` turns off what its modules do not need.
@@ -96,6 +101,7 @@ impl Options {
             default_ports: Ports { http: 80, https: 443 },
             proxy: ProxyConfig::default(),
             fetch: Fetch::for_modules(Selection::all()),
+            stop: None,
         }
     }
 }
@@ -125,11 +131,11 @@ impl Collector {
     pub async fn collect(&self, target: &Target, opts: &Options) -> Snapshot {
         let t0 = Instant::now();
         let collected_at = SystemTime::now();
-        let deadline = tokio::time::Instant::from_std(t0 + opts.timeout);
+        let deadline = Deadline::new(tokio::time::Instant::from_std(t0 + opts.timeout), opts.stop.clone());
 
-        let mut main = Session::new(self, opts, t0, deadline);
+        let mut main = Session::new(self, opts, t0, deadline.clone());
         main.spawn_aux = opts.fetch.robots_and_sitemap || opts.fetch.security_txt;
-        let mut side = Session::new(self, opts, t0, deadline);
+        let mut side = Session::new(self, opts, t0, deadline.clone());
         let check_url = (opts.fetch.http_check && target.url.scheme() == "https" && !target.explicit_port).then(|| {
             let mut url = target.url.clone();
             url.set_scheme("http").expect("https URLs can become http");
@@ -153,7 +159,7 @@ impl Collector {
             },
             async {
                 match &input_host {
-                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Input, deadline).await),
+                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Input, &deadline).await),
                     None => None,
                 }
             }
@@ -246,14 +252,14 @@ impl Collector {
         let (auxiliary, final_records) = tokio::join!(
             async {
                 match (aux_task, &final_url) {
-                    (Some(task), _) => tokio::time::timeout_at(deadline, task).await.ok().and_then(Result::ok),
+                    (Some(task), _) => deadline.run(task).await.and_then(Result::ok),
                     // The page came another way (fallback to port 80): fetch now.
                     (None, Some(url)) if wants_aux => Some(
                         fetch_auxiliary(
                             self.clone(),
                             opts.clone(),
                             t0,
-                            deadline,
+                            deadline.clone(),
                             url.clone(),
                             None,
                             HashMap::new(),
@@ -266,7 +272,7 @@ impl Collector {
             },
             async {
                 match &other_domain {
-                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Final, deadline).await),
+                    Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Final, &deadline).await),
                     None => None,
                 }
             }
@@ -279,12 +285,10 @@ impl Collector {
             None
         };
         let asn = match asn_ip {
-            Some(ip) if !ip.is_loopback() => tokio::time::timeout_at(deadline, asn::lookup(&self.resolver, ip))
-                .await
-                .ok(),
+            Some(ip) if !ip.is_loopback() => deadline.run(asn::lookup(&self.resolver, ip)).await,
             _ => None,
         };
-        let deadline_hit = main.deadline_hit || side.deadline_hit || tokio::time::Instant::now() >= deadline;
+        let deadline_hit = main.deadline_hit || side.deadline_hit || deadline.passed();
 
         Snapshot {
             snapshot_version: SNAPSHOT_VERSION,
@@ -299,6 +303,7 @@ impl Collector {
             https_fallback,
             failure,
             deadline_hit,
+            interrupted: deadline.interrupted(),
             dns,
             asn,
             auxiliary: auxiliary.unwrap_or_default(),
@@ -329,7 +334,7 @@ async fn fetch_auxiliary(
     collector: Collector,
     opts: Options,
     t0: Instant,
-    deadline: tokio::time::Instant,
+    deadline: Deadline,
     page_url: Url,
     h2: Option<Sender>,
     addresses: HashMap<String, Vec<IpAddr>>,
@@ -342,7 +347,7 @@ async fn fetch_auxiliary(
     let security_url = origin.join("/.well-known/security.txt").expect("static path");
 
     let seeded = |sender: Option<Sender>| {
-        let mut session = Session::new(&collector, &opts, t0, deadline);
+        let mut session = Session::new(&collector, &opts, t0, deadline.clone());
         session.addresses = addresses.clone();
         if let Some(sender) = sender {
             let key = session.origin(&page_url);
@@ -384,7 +389,7 @@ async fn fetch_auxiliary(
 
     let sitemap = if fetch.robots_and_sitemap {
         if let Some(done) = body_done {
-            let _ = tokio::time::timeout_at(deadline, done).await;
+            let _ = deadline.run(done).await;
         }
         let declared = robots
             .as_ref()
@@ -445,7 +450,7 @@ struct Session<'a> {
     collector: &'a Collector,
     opts: &'a Options,
     t0: Instant,
-    deadline: tokio::time::Instant,
+    deadline: Deadline,
     pool: HashMap<Origin, Sender>,
     addresses: HashMap<String, Vec<IpAddr>>,
     resolutions: Vec<Resolved>,
@@ -461,7 +466,7 @@ enum Expired {
 }
 
 impl<'a> Session<'a> {
-    fn new(collector: &'a Collector, opts: &'a Options, t0: Instant, deadline: tokio::time::Instant) -> Self {
+    fn new(collector: &'a Collector, opts: &'a Options, t0: Instant, deadline: Deadline) -> Self {
         Session {
             collector,
             opts,
@@ -564,7 +569,7 @@ impl<'a> Session<'a> {
                     step.hop.attempts = attempts;
                     return Ok(step);
                 }
-                Err(e) if e.retryable && attempts == 1 && tokio::time::Instant::now() < self.deadline => {
+                Err(e) if e.retryable && attempts == 1 && !self.deadline.passed() => {
                     self.pool.remove(&self.origin(url));
                 }
                 Err(e) => return Err(e.failure),
@@ -639,7 +644,7 @@ impl<'a> Session<'a> {
                 self.collector.clone(),
                 self.opts.clone(),
                 self.t0,
-                self.deadline,
+                self.deadline.clone(),
                 url.clone(),
                 sender.try_clone(),
                 self.addresses.clone(),
@@ -657,7 +662,7 @@ impl<'a> Session<'a> {
         } else {
             body_limit
         };
-        let raw = http::read_body(response.into_body(), limit, self.deadline).await;
+        let raw = http::read_body(response.into_body(), limit, &self.deadline).await;
         hop.download = headers_at.elapsed();
         self.deadline_hit |= raw.deadline_hit;
         if next.is_none()
@@ -833,15 +838,16 @@ impl<'a> Session<'a> {
 
     /// Runs `fut` until the phase limit or the global deadline, whichever is first.
     async fn within<T>(&self, phase: Option<Duration>, fut: impl Future<Output = T>) -> Result<T, Expired> {
-        let phase_deadline = phase.map(|limit| tokio::time::Instant::now() + limit);
-        let until = phase_deadline.map_or(self.deadline, |p| p.min(self.deadline));
-        tokio::time::timeout_at(until, fut).await.map_err(|_| {
-            if until == self.deadline {
-                Expired::Global
-            } else {
-                Expired::Phase
-            }
-        })
+        let Some(limit) = phase else {
+            return self.deadline.run(fut).await.ok_or(Expired::Global);
+        };
+        self.deadline
+            .run_until(tokio::time::Instant::now() + limit, fut)
+            .await
+            .map_err(|e| match e {
+                deadline::Expired::Global => Expired::Global,
+                deadline::Expired::Limit => Expired::Phase,
+            })
     }
 
     fn phase_timeout(&self, kind: FailureKind, url: &Url, phase: &str, limit: Duration) -> AttemptError {
@@ -854,10 +860,14 @@ impl<'a> Session<'a> {
 
     fn timed_out(&mut self, url: &Url, phase: &str) -> AttemptError {
         self.deadline_hit = true;
-        let message = format!(
-            "global deadline of {} s reached during {phase}",
-            self.opts.timeout.as_secs_f32()
-        );
+        let message = if self.deadline.interrupted() {
+            format!("interrupted during {phase}")
+        } else {
+            format!(
+                "global deadline of {} s reached during {phase}",
+                self.opts.timeout.as_secs_f32()
+            )
+        };
         AttemptError {
             failure: failure(FailureKind::Timeout, url, message),
             retryable: false,
@@ -868,7 +878,7 @@ impl<'a> Session<'a> {
     /// and records whether each host has IPv6.
     async fn settle_into(&mut self, chain: &mut [Hop]) {
         for resolved in &mut self.resolutions {
-            let _ = tokio::time::timeout_at(self.deadline, resolved.settle()).await;
+            let _ = self.deadline.run(resolved.settle()).await;
             for hop in chain.iter_mut() {
                 if let ConnectionUse::New(info) = &mut hop.connection
                     && let Some(resolution) = &mut info.resolution

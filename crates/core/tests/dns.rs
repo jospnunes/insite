@@ -5,14 +5,15 @@ mod server;
 use std::time::Duration;
 
 use insite_core::analyze::analyze;
+use insite_core::collect::deadline::Deadline;
 use insite_core::collect::dns::Resolver;
 use insite_core::collect::{asn, records};
 use insite_core::report::Status;
 use insite_core::snapshot::{DnsResult, DomainRole};
 use server::dns::{Zone, serve};
 
-fn deadline() -> tokio::time::Instant {
-    tokio::time::Instant::now() + Duration::from_secs(5)
+fn deadline() -> Deadline {
+    Deadline::new(tokio::time::Instant::now() + Duration::from_secs(5), None)
 }
 
 fn healthy_zone() -> Zone {
@@ -41,7 +42,7 @@ fn healthy_zone() -> Zone {
 #[tokio::test(flavor = "multi_thread")]
 async fn collects_records_and_follows_spf_includes() {
     let resolver = Resolver::with_nameserver(serve(healthy_zone()).await).unwrap();
-    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, deadline()).await;
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
 
     assert_eq!(records.registrable, "exemplo.test");
     assert_eq!(records.records("www.exemplo.test", "A"), ["192.0.2.10"]);
@@ -64,7 +65,7 @@ async fn collects_records_and_follows_spf_includes() {
 async fn dns_module_reads_a_healthy_domain_without_findings() {
     let resolver = Resolver::with_nameserver(serve(healthy_zone()).await).unwrap();
     let mut snap = snapshot();
-    snap.dns = vec![records::collect(&resolver, "www.exemplo.test", DomainRole::Input, deadline()).await];
+    snap.dns = vec![records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await];
     let module = analyze(&snap).modules.dns;
 
     assert!(
@@ -98,7 +99,7 @@ async fn server_failures_are_unknown_not_missing() {
     let zone = zone.txt("exemplo.test", "v=spf1 mx -all");
     let resolver = Resolver::with_nameserver(serve(zone).await).unwrap();
     let mut snap = snapshot();
-    snap.dns = vec![records::collect(&resolver, "www.exemplo.test", DomainRole::Input, deadline()).await];
+    snap.dns = vec![records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await];
     let module = analyze(&snap).modules.dns;
 
     let ids: Vec<&str> = module.findings.iter().map(|f| f.id).collect();
@@ -147,6 +148,7 @@ fn snapshot() -> insite_core::snapshot::Snapshot {
         https_fallback: None,
         failure: None,
         deadline_hit: false,
+        interrupted: false,
         dns: Vec::new(),
         asn: None,
         auxiliary: Default::default(),

@@ -9,6 +9,7 @@ mod dom;
 mod inputs;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use aho_corasick::{AhoCorasick, AhoCorasickKind};
@@ -30,6 +31,7 @@ const EMBEDDED: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/index.json"));
 
 pub struct Engine {
     index: Index,
+    origin: Origin,
     by_name: HashMap<String, u32>,
     prefilters: HashMap<Field, Prefilter>,
     /// Patterns of a field that have no needles and always run.
@@ -76,14 +78,115 @@ pub struct Technology {
     pub implied_by: Option<String>,
 }
 
-/// The engine built from the embedded index. Building takes tens of
-/// milliseconds; call `warm_up` at t = 0 so it happens while the network works.
+/// Where the engine may find signatures besides the embedded ones.
+struct LocalData {
+    /// The cache directory, where `insite update` keeps `signatures/index.json`.
+    cache: Option<PathBuf>,
+    /// The configuration directory, with the user's `fingerprints/*.json`.
+    config: Option<PathBuf>,
+}
+
+static LOCAL: OnceLock<LocalData> = OnceLock::new();
+
+/// Lets the engine use the signatures from `insite update` and the user's own.
+/// Call before the engine first loads. Tests never call it, so they only ever
+/// see the embedded index.
+pub fn use_local_data(cache: Option<PathBuf>, config: Option<PathBuf>) {
+    let _ = LOCAL.set(LocalData { cache, config });
+}
+
+/// The detection engine. Building takes tens of milliseconds; call `warm_up`
+/// at t = 0 so it happens while the network works.
 pub fn engine() -> &'static Engine {
     static ENGINE: OnceLock<Engine> = OnceLock::new();
     ENGINE.get_or_init(|| {
-        let index: Index = serde_json::from_slice(EMBEDDED).expect("embedded index is valid");
-        Engine::new(index)
+        let (index, origin) = load_index();
+        let mut engine = Engine::new(index);
+        engine.origin = origin;
+        engine
     })
+}
+
+/// Which signatures the engine runs.
+#[derive(Debug, Clone, Default)]
+pub struct Origin {
+    /// The base index came from `insite update`, not from the binary.
+    pub updated: bool,
+    /// Technologies from the user's own signature files.
+    pub custom: usize,
+}
+
+/// The embedded index, replaced by the updated one when that is newer and of
+/// the same format, plus the user's own signatures. Problems are reported and
+/// skipped: they never stop an analysis.
+fn load_index() -> (Index, Origin) {
+    let mut index: Index = serde_json::from_slice(EMBEDDED).expect("embedded index is valid");
+    let mut origin = Origin::default();
+    let Some(local) = LOCAL.get() else {
+        return (index, origin);
+    };
+
+    if let Some(path) = local.cache.as_ref().map(|d| d.join("signatures").join("index.json"))
+        && path.exists()
+    {
+        match std::fs::read(&path)
+            .map_err(|e| e.to_string())
+            .and_then(|b| serde_json::from_slice::<Index>(&b).map_err(|e| e.to_string()))
+        {
+            Ok(updated) if updated.format != insite_sigc::index::FORMAT => eprintln!(
+                "insite: ignoring {}: index format {} (this insite reads {}); run insite update",
+                path.display(),
+                updated.format,
+                insite_sigc::index::FORMAT
+            ),
+            Ok(updated) if updated.source_date > index.source_date => {
+                index = updated;
+                origin.updated = true;
+            }
+            Ok(_) => {}
+            Err(e) => eprintln!("insite: ignoring {}: {e}", path.display()),
+        }
+    }
+
+    if let Some(dir) = local.config.as_ref().map(|d| d.join("fingerprints"))
+        && dir.is_dir()
+    {
+        match custom_index(&dir, &index) {
+            Ok(Some(custom)) => {
+                origin.custom = custom.techs.len();
+                index.merge(custom);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("insite: ignoring custom signatures in {}: {e}", dir.display()),
+        }
+    }
+    (index, origin)
+}
+
+/// Compiles every `*.json` in `dir`, in the webappanalyzer format, against the
+/// base index's categories.
+fn custom_index(dir: &Path, base: &Index) -> Result<Option<Index>, String> {
+    let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
+        .map_err(|e| e.to_string())?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x == "json"))
+        .collect();
+    if files.is_empty() {
+        return Ok(None);
+    }
+    files.sort();
+    let texts: Vec<String> = files
+        .iter()
+        .map(|p| std::fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display())))
+        .collect::<Result<_, _>>()?;
+    let categories = base.categories_json();
+    let sources = insite_sigc::Sources {
+        technologies: texts.iter().map(String::as_str).collect(),
+        categories: &categories,
+        source: format!("custom ({})", dir.display()),
+        source_date: String::new(),
+    };
+    insite_sigc::compile(&sources).map(|(index, _)| Some(index))
 }
 
 /// Builds the engine on a background thread.
@@ -149,6 +252,7 @@ impl Engine {
         let selectors = (0..index.patterns.len()).map(|_| OnceLock::new()).collect();
         Engine {
             index,
+            origin: Origin::default(),
             by_name,
             prefilters,
             always,
@@ -161,6 +265,19 @@ impl Engine {
 
     pub fn source(&self) -> (&str, &str) {
         (&self.index.source, &self.index.source_date)
+    }
+
+    /// The signatures in use, for the report: base source and date, whether
+    /// they came from `insite update`, and how many custom technologies.
+    pub fn provenance(&self) -> String {
+        let mut text = format!("{} ({})", self.index.source, self.index.source_date);
+        if self.origin.updated {
+            text.push_str(", updated");
+        }
+        if self.origin.custom > 0 {
+            text.push_str(&format!(", plus {} custom", self.origin.custom));
+        }
+        text
     }
 
     pub fn technology_count(&self) -> usize {

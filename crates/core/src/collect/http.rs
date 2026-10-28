@@ -12,6 +12,7 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::io::{AsyncRead, AsyncWrite};
 use url::Url;
 
+use super::deadline::Deadline;
 use crate::snapshot::{HttpVersion, RequestProfile};
 
 pub const ACCEPT_VALUE: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -123,7 +124,7 @@ pub struct RawBody {
 }
 
 /// Reads the body until the end, `limit` bytes on the wire or `deadline`.
-pub async fn read_body(mut body: Incoming, limit: usize, deadline: tokio::time::Instant) -> RawBody {
+pub async fn read_body(mut body: Incoming, limit: usize, deadline: &Deadline) -> RawBody {
     let mut raw = RawBody {
         bytes: Vec::new(),
         truncated: false,
@@ -131,8 +132,8 @@ pub async fn read_body(mut body: Incoming, limit: usize, deadline: tokio::time::
         error: None,
     };
     loop {
-        let frame = match tokio::time::timeout_at(deadline, body.frame()).await {
-            Err(_) => {
+        let frame = match deadline.run(body.frame()).await.ok_or(()) {
+            Err(()) => {
                 raw.deadline_hit = true;
                 raw.truncated = true;
                 return raw;

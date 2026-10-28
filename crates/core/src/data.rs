@@ -183,17 +183,10 @@ pub fn hsts_preloaded(host: &str) -> bool {
     false
 }
 
-const WEBAPPANALYZER_SOURCE: &str = include_str!("../data/webappanalyzer/SOURCE.toml");
-
-/// The reference data embedded in this build, for the report's `sources`.
-pub fn sources() -> Vec<crate::report::DataSource> {
+/// The reference data the analysis used, for the report's `sources`. The
+/// signatures appear when stack detection ran, as `Engine::provenance` tells.
+pub fn sources(signatures: Option<String>) -> Vec<crate::report::DataSource> {
     use crate::report::DataSource;
-    #[derive(Deserialize)]
-    struct Source {
-        source: String,
-        date: String,
-    }
-    let signatures: Source = toml::from_str(WEBAPPANALYZER_SOURCE).expect("embedded SOURCE.toml is valid");
     // "... on 2026.10.28." / "... as of 2026.10.28." in the first line of each file.
     let dated = |text: &str| {
         let first = text.lines().next().unwrap_or_default();
@@ -203,12 +196,15 @@ pub fn sources() -> Vec<crate::report::DataSource> {
             .map(|w| w.trim_end_matches('.').replace('.', "-"))
             .unwrap_or_default()
     };
-    vec![
-        DataSource {
+    let mut list: Vec<DataSource> = signatures
+        .into_iter()
+        .map(|version| DataSource {
             name: "webappanalyzer",
-            version: format!("{} ({})", signatures.source, signatures.date),
+            version,
             license: "GPL-3.0",
-        },
+        })
+        .collect();
+    list.extend([
         DataSource {
             name: "ccadb",
             version: dated(INTERMEDIATES),
@@ -224,7 +220,8 @@ pub fn sources() -> Vec<crate::report::DataSource> {
             version: "mdn/mdn-http-observatory@2776308".into(),
             license: "MPL-2.0",
         },
-    ]
+    ]);
+    list
 }
 
 pub fn hex(text: &str) -> Option<Vec<u8>> {
@@ -274,11 +271,16 @@ mod tests {
 
     #[test]
     fn sources_name_their_versions() {
-        let sources = sources();
+        let sources = sources(Some(crate::detect::engine().provenance()));
         assert!(sources.iter().all(|s| !s.version.is_empty()), "{sources:?}");
         let ccadb = sources.iter().find(|s| s.name == "ccadb").unwrap();
         assert_eq!(ccadb.version.len(), 10, "{}", ccadb.version);
-        assert!(sources[0].version.starts_with("enthec/webappanalyzer@"));
+        assert!(
+            sources[0].version.starts_with("enthec/webappanalyzer@"),
+            "{}",
+            sources[0].version
+        );
+        assert!(!super::sources(None).iter().any(|s| s.name == "webappanalyzer"));
     }
 
     #[test]

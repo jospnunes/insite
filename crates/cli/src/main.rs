@@ -4,6 +4,7 @@ mod render;
 mod run;
 mod snapshots;
 mod style;
+mod update;
 
 use std::io::{BufRead, IsTerminal};
 use std::path::PathBuf;
@@ -39,6 +40,15 @@ enum Command {
     Explain {
         /// A finding id such as sec.hsts.missing, or a prefix such as sec.
         id: Option<String>,
+    },
+    /// Download the newest webappanalyzer signatures into the cache directory
+    Update {
+        /// Validate certificates against the system trust store
+        #[arg(long)]
+        native_roots: bool,
+        /// Download and compile even when the signatures are up to date
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -109,8 +119,12 @@ pub enum Format {
 
 fn main() -> ExitCode {
     let cli = Cli::parse();
-    if let Some(Command::Explain { id }) = cli.command {
-        return explain::run(id.as_deref());
+    // Signatures from `insite update` and the user's own, when present.
+    insite_core::detect::use_local_data(insite_core::dirs::cache_dir(), insite_core::dirs::config_dir());
+    match cli.command {
+        Some(Command::Explain { id }) => return explain::run(id.as_deref()),
+        Some(Command::Update { native_roots, force }) => return update::run(native_roots, force),
+        None => {}
     }
     let args = cli.args;
 
@@ -197,7 +211,7 @@ fn read_list(input: impl BufRead) -> std::io::Result<Vec<String>> {
 }
 
 /// curl's conventions: `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY`, upper or lower case.
-fn proxy_from_env() -> Result<ProxyConfig, String> {
+pub fn proxy_from_env() -> Result<ProxyConfig, String> {
     let var = |name: &str| {
         std::env::var(name)
             .or_else(|_| std::env::var(name.to_ascii_lowercase()))

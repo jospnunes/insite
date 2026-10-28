@@ -6,6 +6,7 @@ use std::time::Duration;
 use hickory_resolver::proto::rr::RecordType;
 use tokio::task::JoinSet;
 
+use super::deadline::Deadline;
 use super::dns::Resolver;
 use crate::analyze::spf;
 use crate::snapshot::{DnsAnswer, DnsResult, DomainRecords, DomainRole};
@@ -66,19 +67,14 @@ pub fn plan(host: &str, registrable: &str) -> Vec<(String, RecordType)> {
     queries
 }
 
-pub async fn collect(
-    resolver: &Resolver,
-    host: &str,
-    role: DomainRole,
-    deadline: tokio::time::Instant,
-) -> DomainRecords {
+pub async fn collect(resolver: &Resolver, host: &str, role: DomainRole, deadline: &Deadline) -> DomainRecords {
     let host = host.trim_end_matches('.').to_ascii_lowercase();
     let registrable = registrable(&host);
-    let mut answers = run(resolver, plan(&host, &registrable), deadline).await;
+    let mut answers = run(resolver, plan(&host, &registrable), deadline, deadline.instant()).await;
 
     // Follow SPF includes and redirects until the tree is known or the lookup
     // limit is passed, in rounds of parallel queries.
-    let spf_deadline = deadline.min(tokio::time::Instant::now() + SPF_BUDGET);
+    let spf_deadline = deadline.instant().min(tokio::time::Instant::now() + SPF_BUDGET);
     loop {
         let known: HashMap<String, Vec<String>> = answers
             .iter()
@@ -100,10 +96,10 @@ pub async fn collect(
             .filter(|t| !failed.contains(&t.as_str()))
             .map(|t| (t, RecordType::TXT))
             .collect();
-        if pending.is_empty() || tokio::time::Instant::now() >= spf_deadline {
+        if pending.is_empty() || deadline.passed() || tokio::time::Instant::now() >= spf_deadline {
             break;
         }
-        answers.extend(run(resolver, pending, spf_deadline).await);
+        answers.extend(run(resolver, pending, deadline, spf_deadline).await);
     }
 
     DomainRecords {
@@ -114,17 +110,20 @@ pub async fn collect(
     }
 }
 
+/// Runs the queries in parallel, each until `cap`, its own timeout or the deadline.
 async fn run(
     resolver: &Resolver,
     queries: Vec<(String, RecordType)>,
-    deadline: tokio::time::Instant,
+    deadline: &Deadline,
+    cap: tokio::time::Instant,
 ) -> Vec<DnsAnswer> {
     let mut set = JoinSet::new();
     for (i, (name, record_type)) in queries.iter().cloned().enumerate() {
         let resolver = resolver.clone();
-        let until = deadline.min(tokio::time::Instant::now() + QUERY_TIMEOUT);
+        let deadline = deadline.clone();
+        let until = cap.min(tokio::time::Instant::now() + QUERY_TIMEOUT);
         set.spawn(async move {
-            let result = match tokio::time::timeout_at(until, resolver.query(&name, record_type)).await {
+            let result = match deadline.run_until(until, resolver.query(&name, record_type)).await {
                 Ok(result) => result,
                 Err(_) => DnsResult::Failed("no answer before the deadline".into()),
             };

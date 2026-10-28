@@ -36,6 +36,9 @@ pub struct Snapshot {
     pub failure: Option<FetchFailure>,
     /// The global deadline expired before collection finished.
     pub deadline_hit: bool,
+    /// The user stopped the collection (Ctrl-C) before it finished.
+    #[serde(default)]
+    pub interrupted: bool,
     /// DNS records of the input's registrable domain and, when the chain ends on
     /// another registrable domain, of that one too.
     pub dns: Vec<DomainRecords>,
