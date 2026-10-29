@@ -680,6 +680,7 @@ impl<'a> Session<'a> {
                 transferred: raw.bytes.len() as u64,
                 content_encoding: encoding.map(str::to_owned),
                 truncated: raw.truncated || decoded.truncated,
+                deadline_hit: raw.deadline_hit,
                 decode_error: raw.error.or(decoded.error),
                 body: decoded.body,
             }

@@ -177,9 +177,13 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Network> {
                 reason = Some(failure.message.clone());
             }
         }
-    } else if snapshot.deadline_hit {
+    } else if snapshot.page.as_ref().is_some_and(|p| p.deadline_hit) {
         status = Status::Partial;
-        reason = Some("the deadline expired while the page was downloading".to_owned());
+        reason = Some(if snapshot.interrupted {
+            "interrupted while the page was downloading".to_owned()
+        } else {
+            "the deadline expired while the page was downloading".to_owned()
+        });
     }
 
     Module {

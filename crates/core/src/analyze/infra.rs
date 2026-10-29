@@ -216,6 +216,7 @@ pub(crate) mod tests {
                 transferred: 0,
                 content_encoding: None,
                 truncated: false,
+                deadline_hit: false,
                 decode_error: None,
             }),
             http_check: None,

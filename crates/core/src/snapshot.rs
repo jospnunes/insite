@@ -357,6 +357,9 @@ pub struct Page {
     pub content_encoding: Option<String>,
     /// The body hit the limit, before or after decompression, and was cut.
     pub truncated: bool,
+    /// The deadline expired before the body finished; what arrived is kept.
+    #[serde(default)]
+    pub deadline_hit: bool,
     pub decode_error: Option<String>,
 }
 

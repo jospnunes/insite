@@ -14,7 +14,7 @@ use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
 use insite_core::collect::proxy::ProxyConfig;
 use insite_core::collect::target::Target;
 use insite_core::collect::{Collector, Options, Ports};
-use insite_core::report::Outcome;
+use insite_core::report::{Outcome, Status};
 use insite_core::snapshot::{
     CertProblem, ConnectionUse, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
 };
@@ -220,7 +220,7 @@ async fn deadline_during_the_body_keeps_what_arrived() {
     let snap = collect(&server, "/", true, &opts).await;
 
     let page = snap.page.as_ref().unwrap();
-    assert!(snap.deadline_hit && page.truncated);
+    assert!(snap.deadline_hit && page.truncated && page.deadline_hit);
     assert!(!page.body.is_empty() && page.body.len() < 300);
     let report = analyze(&snap);
     assert!(matches!(report.outcome, Outcome::Partial { .. }));
@@ -260,6 +260,39 @@ async fn port_80_check_sees_the_https_redirect() {
         analyze(&snap).modules.network.data.unwrap().https,
         HttpsEnforcement::Redirects
     );
+}
+
+/// A port 80 that never answers holds the collection until the deadline, but the
+/// page arrived whole: only the check is missing, not the download.
+#[tokio::test(flavor = "multi_thread")]
+async fn silent_port_80_does_not_blame_the_page() {
+    let https = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { ok("secure") }).await;
+    let http = Server::start(TlsMode::Plain, 0, |_| async {
+        tokio::time::sleep(Duration::from_secs(10)).await;
+        ok("late")
+    })
+    .await;
+
+    let mut opts = options();
+    opts.timeout = Duration::from_millis(800);
+    opts.default_ports = Ports {
+        http: http.addr.port(),
+        https: https.addr.port(),
+    };
+    let collector = Collector::new(&[https.ca_der.clone().unwrap()]).unwrap();
+    let snap = collector.collect(&Target::parse("localhost").unwrap(), &opts).await;
+
+    assert!(snap.deadline_hit);
+    let page = snap.page.as_ref().unwrap();
+    assert!(!page.truncated && !page.deadline_hit);
+    let report = analyze(&snap);
+    assert_eq!(
+        report.modules.network.status,
+        Status::Ok,
+        "{:?}",
+        report.modules.network.reason
+    );
+    assert_eq!(report.modules.security.status, Status::Partial);
 }
 
 #[tokio::test(flavor = "multi_thread")]
