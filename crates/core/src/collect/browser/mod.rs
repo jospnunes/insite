@@ -8,8 +8,10 @@
 
 pub mod cdp;
 
+use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -31,6 +33,8 @@ const QUIET_CAP: Duration = Duration::from_secs(15);
 /// Kept for the final evaluation before the browser deadline.
 const EVALUATE_RESERVE: Duration = Duration::from_millis(1500);
 const CONSOLE_LIMIT: usize = 20;
+/// The browser's last stderr lines kept, to explain a failed start.
+const STDERR_LINES: usize = 5;
 
 /// How the page is emulated.
 #[derive(Debug, Clone)]
@@ -55,6 +59,11 @@ pub struct Browser {
     executable: PathBuf,
     product: String,
     warnings: Vec<String>,
+    /// The last lines the browser printed to stderr, read until it closes.
+    #[cfg_attr(not(unix), allow(dead_code))]
+    stderr: Arc<Mutex<VecDeque<String>>>,
+    #[cfg_attr(not(unix), allow(dead_code))]
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
 
 /// `CHROME_PATH`, then the usual places of Chrome, Chromium, Edge and Brave.
@@ -133,7 +142,7 @@ impl Browser {
             .arg(format!("--user-data-dir={}", profile.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            .stderr(Stdio::piped());
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } == 0 {
             command.arg("--no-sandbox");
@@ -159,10 +168,16 @@ impl Browser {
                 Ok(())
             });
         }
-        let child = command
+        let mut child = command
             .spawn()
             .map_err(|e| format!("could not start {}: {e}", executable.display()))?;
         drop((child_reads, child_writes));
+        // Drained to the end, or the browser blocks once the pipe is full.
+        let stderr = Arc::new(Mutex::new(VecDeque::new()));
+        let stderr_reader = child.stderr.take().map(|pipe| {
+            let lines = Arc::clone(&stderr);
+            std::thread::spawn(move || keep_last_lines(pipe, &lines))
+        });
         let (conn, events) = Connection::new(we_read, we_write);
         let mut browser = Browser {
             child,
@@ -172,6 +187,8 @@ impl Browser {
             executable,
             product: String::new(),
             warnings,
+            stderr,
+            stderr_reader,
         };
         match browser.conn.call("Browser.getVersion", json!({}), None, deadline).await {
             Ok(v) => {
@@ -179,8 +196,22 @@ impl Browser {
                 Ok(browser)
             }
             Err(e) => {
+                let reader = browser.stderr_reader.take();
+                let printed = Arc::clone(&browser.stderr);
                 browser.close().await;
-                Err(format!("the browser did not start: {e}"))
+                // The reader ends when stderr closes, just after the browser exits.
+                if let Some(reader) = reader {
+                    let until = Instant::now() + Duration::from_millis(500);
+                    while !reader.is_finished() && Instant::now() < until {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                }
+                let printed: Vec<String> = printed.lock().map(|l| l.iter().cloned().collect()).unwrap_or_default();
+                Err(if printed.is_empty() {
+                    format!("the browser did not start: {e}")
+                } else {
+                    format!("the browser did not start: {e}; it printed: {}", printed.join(" | "))
+                })
             }
         }
     }
@@ -405,6 +436,31 @@ impl Browser {
         let _ = self.child.kill();
         let _ = self.child.wait();
         let _ = std::fs::remove_dir_all(&self.profile);
+    }
+}
+
+/// Reads `pipe` to the end, keeping its last non-empty lines.
+#[cfg(unix)]
+fn keep_last_lines(pipe: impl std::io::Read, lines: &Mutex<VecDeque<String>>) {
+    use std::io::BufRead;
+    let mut reader = std::io::BufReader::new(pipe);
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        match reader.read_until(b'\n', &mut line) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+        let text: String = String::from_utf8_lossy(&line).trim().chars().take(200).collect();
+        if text.is_empty() {
+            continue;
+        }
+        if let Ok(mut lines) = lines.lock() {
+            if lines.len() == STDERR_LINES {
+                lines.pop_front();
+            }
+            lines.push_back(text);
+        }
     }
 }
 
