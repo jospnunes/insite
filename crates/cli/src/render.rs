@@ -490,6 +490,7 @@ fn email(d: &DomainReport, s: &Style) -> String {
     let mut parts = Vec::new();
     let mut unknown = Vec::new();
     match d.mx.first() {
+        Some(_) if d.null_mx => parts.push("null MX".to_owned()),
         Some(mx) => parts.push(
             d.mail_provider
                 .clone()
@@ -645,7 +646,11 @@ fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
             row(out, "CNAME", &d.cname.join(", "));
             let provider = d.dns_provider.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
             row(out, "NS", format!("{}{provider}", d.ns.join(", ")).trim());
-            let mail = d.mail_provider.as_ref().map(|p| format!(" ({p})")).unwrap_or_default();
+            let mail = match &d.mail_provider {
+                Some(p) => format!(" ({p})"),
+                None if d.null_mx => " (null MX: accepts no mail)".to_owned(),
+                None => String::new(),
+            };
             row(out, "MX", format!("{}{mail}", d.mx.join(", ")).trim());
             if let Some(spf) = &d.spf {
                 let incomplete = if spf.lookups_incomplete { "+" } else { "" };

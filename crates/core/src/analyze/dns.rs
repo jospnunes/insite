@@ -26,6 +26,8 @@ pub struct DomainReport {
     pub ns: Vec<String>,
     pub dns_provider: Option<String>,
     pub mx: Vec<String>,
+    /// The only MX is `0 .` (RFC 7505): the domain accepts no mail.
+    pub null_mx: bool,
     pub mail_provider: Option<String>,
     pub caa: Vec<String>,
     /// A DS record exists at the parent, so the zone is signed.
@@ -137,7 +139,17 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
     let list = |name: &str, rtype: &str| records.records(name, rtype).to_vec();
 
     let ns = list(reg, "NS");
-    let mx = list(reg, "MX");
+    // The collector trims the root's dot, so a null MX arrives as `0 `.
+    let mx: Vec<String> = list(reg, "MX")
+        .into_iter()
+        .map(|m| {
+            if mx_host(&m).is_empty() {
+                format!("{} .", m.trim())
+            } else {
+                m
+            }
+        })
+        .collect();
     let caa = caa(records);
     let failed_queries: Vec<String> = records
         .answers
@@ -166,9 +178,8 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
     // send mail in its name.
     let mx_known = !matches!(records.result(reg, "MX"), Some(DnsResult::Failed(_)) | None);
     // A null MX (`0 .`, RFC 7505) declares that the domain accepts no mail.
-    let receives_mail = mx
-        .iter()
-        .any(|m| !mx_host(m).trim_end_matches('.').is_empty() && mx_host(m) != m);
+    let receives_mail = mx.iter().any(|m| !mx_host(m).trim_end_matches('.').is_empty());
+    let null_mx = !mx.is_empty() && !receives_mail;
     if mx_known && !receives_mail && spf.is_none() && dmarc.is_none() && txt_known(records, reg) {
         findings.push(finding(
             "mail.spoofable",
@@ -210,7 +221,10 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
                 .map(|d| (d.name.as_str(), d.patterns.ns.as_slice())),
         ),
         mail_provider: provider(
-            &mx.iter().map(|m| mx_host(m).to_owned()).collect::<Vec<_>>(),
+            &mx.iter()
+                .map(|m| mx_host(m).to_owned())
+                .filter(|h| h != ".")
+                .collect::<Vec<_>>(),
             providers()
                 .mail
                 .iter()
@@ -218,6 +232,7 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
         ),
         ns,
         mx,
+        null_mx,
         caa,
         dnssec: !records.records(reg, "DS").is_empty(),
         spf,
@@ -260,7 +275,7 @@ fn caa(records: &DomainRecords) -> Vec<String> {
 }
 
 fn mx_host(mx: &str) -> &str {
-    mx.split_whitespace().nth(1).unwrap_or(mx)
+    mx.split_whitespace().nth(1).unwrap_or_default()
 }
 
 /// The provider whose patterns match every name in `names` (mixed NS sets, such
@@ -499,6 +514,23 @@ mod tests {
         let d = domain(&rec, &mut findings);
         assert_eq!(ids(&findings), ["mail.spf.missing", "mail.dmarc.missing"]);
         assert_eq!(d.mail_provider.as_deref(), Some("Locaweb"));
+    }
+
+    #[test]
+    fn null_mx_declares_no_mail() {
+        // The collector trims the root's dot, so `0 .` arrives as `0 `.
+        let rec = domain_records(vec![
+            answer("exemplo.com.br", "MX", &["0 "]),
+            answer("exemplo.com.br", "TXT", &["v=spf1 -all"]),
+            answer("_dmarc.www.exemplo.com.br", "TXT", &[]),
+            answer("_dmarc.exemplo.com.br", "TXT", &["v=DMARC1; p=reject;"]),
+        ]);
+        let mut findings = Vec::new();
+        let d = domain(&rec, &mut findings);
+        assert!(findings.is_empty(), "{:?}", ids(&findings));
+        assert!(d.null_mx);
+        assert_eq!(d.mx, ["0 ."]);
+        assert_eq!(d.mail_provider, None);
     }
 
     #[test]
