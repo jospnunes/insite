@@ -83,8 +83,14 @@ impl Resolver {
     }
 
     /// Asks one of a zone's own name servers directly, over UDP and then TCP when
-    /// the answer is truncated, without asking it to recurse.
+    /// the answer is truncated, without asking it to recurse. Only public
+    /// addresses: a zone's NS can name any host, and following one into the local
+    /// network would make insite probe it for the site being analyzed. Tests,
+    /// which move the port, run their name servers on loopback.
     pub fn authoritative(&self, ip: IpAddr) -> Result<Self, String> {
+        if self.authoritative_port == 53 && !is_public(ip) {
+            return Err(format!("{ip} is not a public address"));
+        }
         let mut server = NameServerConfig::udp_and_tcp(ip);
         for connection in &mut server.connections {
             connection.port = self.authoritative_port;
@@ -259,6 +265,38 @@ struct LookupError {
     message: String,
     no_records: bool,
     retryable: bool,
+}
+
+/// Whether an address belongs to the public internet: not loopback, private,
+/// shared (CGNAT), link-local, unique-local, multicast, documentation or reserved.
+fn is_public(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            let [a, b, ..] = v4.octets();
+            !(v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_unspecified()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_multicast()
+                || a == 0
+                || a >= 240
+                || (a == 100 && (64..128).contains(&b)))
+        }
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => is_public(IpAddr::V4(v4)),
+            None => {
+                let first = v6.segments()[0];
+                !(v6.is_loopback()
+                    || v6.is_unspecified()
+                    || v6.is_multicast()
+                    || first & 0xfe00 == 0xfc00
+                    || first & 0xffc0 == 0xfe80
+                    || first == 0x2001 && v6.segments()[1] == 0x0db8)
+            }
+        },
+    }
 }
 
 /// Fully qualified, so the resolver's search list never applies. ASCII names are

@@ -231,6 +231,32 @@ async fn a_silent_resolver_ends_on_the_query_timeout() {
     );
 }
 
+/// A zone's NS can name any host. Following one to a private address would make
+/// insite probe the local network on behalf of the site being analyzed.
+#[tokio::test(flavor = "multi_thread")]
+async fn name_servers_on_private_addresses_are_not_asked() {
+    let zone = Zone::default()
+        .a("www.exemplo.test", "192.0.2.10")
+        .ns("exemplo.test", "ns1.exemplo.test.")
+        .a("ns1.exemplo.test", "127.0.0.1")
+        .failing_type("exemplo.test", RecordType::TXT);
+    // No port override: name servers are asked on port 53, as in real use.
+    let resolver = Resolver::with_nameserver(serve(zone).await).unwrap();
+    assert!(resolver.authoritative("127.0.0.1".parse().unwrap()).is_err());
+    assert!(resolver.authoritative("192.168.15.1".parse().unwrap()).is_err());
+    assert!(resolver.authoritative("fd00::1".parse().unwrap()).is_err());
+    assert!(resolver.authoritative("8.8.8.8".parse().unwrap()).is_ok());
+
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+    let txt = records
+        .answers
+        .iter()
+        .find(|a| a.name == "exemplo.test" && a.record_type == "TXT")
+        .unwrap();
+    assert!(matches!(txt.result, DnsResult::Failed(_)), "{:?}", txt.result);
+    assert_eq!(txt.authoritative, None);
+}
+
 /// A negative answer without the zone's SOA is a referral, not proof of absence.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_referral_is_not_an_absence() {
