@@ -107,8 +107,9 @@ struct Args {
     #[arg(long, value_name = "FILE", conflicts_with = "urls")]
     from: Option<PathBuf>,
 
-    /// User-Agent: hybrid (Chrome string plus insite), chrome, honest, or any text
-    #[arg(long, default_value = "hybrid", value_name = "PROFILE")]
+    /// User-Agent: honest (insite/<version>), hybrid (Chrome string plus insite),
+    /// chrome, or any text
+    #[arg(long, default_value = "honest", value_name = "PROFILE")]
     ua: String,
 
     /// Accept-Language to send (default: from the system locale)

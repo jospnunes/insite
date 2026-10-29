@@ -81,7 +81,7 @@ insite [options] <url>...
   -v, --verbose              every section in full, with evidence
       --save <file>          save the raw snapshot (gzip with .gz)
       --from <file>          analyze saved snapshots without network
-      --ua <profile>         hybrid (default), chrome, honest, or any text
+      --ua <profile>         honest (default), hybrid, chrome, or any text
       --lang <tag>           Accept-Language (default: from the system locale)
       --native-roots         trust the system's certificate store
   -c, --concurrency <n>      sites in parallel in batch mode (default 8)
