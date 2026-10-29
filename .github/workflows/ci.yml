@@ -56,6 +56,16 @@ jobs:
               echo "CHROME_PATH=$(command -v "$c" || echo "$c")" >> "$GITHUB_ENV"; break
             fi
           done
+      # A first start on a fresh runner reads the browser from a cold disk and
+      # has been seen to take over 30 s; the log shows how long it took, and
+      # the tests then start a warm browser.
+      - name: Warm up Chrome
+        if: env.CHROME_PATH != ''
+        shell: bash
+        run: |
+          profile=$(mktemp -d)
+          time "$CHROME_PATH" --headless --no-first-run --user-data-dir="$profile" --dump-dom about:blank > /dev/null
+          rm -rf "$profile"
       - run: cargo test --all-targets
 
   msrv:
