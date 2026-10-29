@@ -129,7 +129,7 @@ pub fn entry(id: &str) -> Option<Entry<'static>> {
 }
 
 pub fn parse(source: &str) -> Option<Entry<'_>> {
-    let (header, body) = source.split_once("\n---\n")?;
+    let (header, body) = split_at_line(source, "---")?;
     let mut severity = None;
     let mut title = None;
     for line in header.lines() {
@@ -139,13 +139,27 @@ pub fn parse(source: &str) -> Option<Entry<'_>> {
             _ => {}
         }
     }
-    let (detail, fix) = body.split_once("\n## Fix\n")?;
+    let (detail, fix) = split_at_line(body, "## Fix")?;
     Some(Entry {
         severity: severity?,
         title: title?,
         detail: detail.trim(),
         fix: fix.trim(),
     })
+}
+
+/// The text before and after the first line that reads `marker`, with LF or
+/// CRLF line endings alike (a Windows checkout may convert them).
+fn split_at_line<'a>(text: &'a str, marker: &str) -> Option<(&'a str, &'a str)> {
+    let mut start = 0;
+    for line in text.split_inclusive('\n') {
+        let end = start + line.len();
+        if line.trim_end() == marker {
+            return Some((&text[..start], &text[end..]));
+        }
+        start = end;
+    }
+    None
 }
 
 /// Builds a finding from the catalog. Panics on an id missing from the catalog,
@@ -192,6 +206,13 @@ mod tests {
                 "{name} is not in the catalog! list"
             );
         }
+    }
+
+    #[test]
+    fn crlf_entries_parse_too() {
+        let source = "severity: low\r\ntitle: T\r\n---\r\nDetail.\r\n\r\n## Fix\r\nFix it.\r\n";
+        let entry = parse(source).unwrap();
+        assert_eq!((entry.title, entry.detail, entry.fix), ("T", "Detail.", "Fix it."));
     }
 
     #[test]

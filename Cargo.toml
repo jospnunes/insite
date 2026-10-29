@@ -36,8 +36,8 @@ fancy-regex = "0.20"
 psl = "2"
 toml = { version = "1", default-features = false, features = ["std", "parse", "serde"] }
 clap = { version = "4", features = ["derive"] }
-insite-core = { path = "crates/core" }
-insite-sigc = { path = "crates/sigc" }
+insite-core = { path = "crates/core", version = "0.1.0-dev" }
+insite-sigc = { path = "crates/sigc", version = "0.1.0-dev" }
 
 # The build script compiles 15,000 signature patterns; optimize it in dev builds.
 [profile.dev.build-override]

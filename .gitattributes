@@ -1,0 +1,4 @@
+# Embedded text (findings catalog, data files) is parsed at build and run
+# time: keep LF everywhere, also in Windows checkouts.
+* text=auto eol=lf
+*.png binary
