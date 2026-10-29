@@ -1,0 +1,104 @@
+# Reference list: every speed and precision target is measured on these 100 sites
+# (docs/arquitetura.md, "Lista de referência"). segment<TAB>input<TAB>platform the
+# segment asks for, as found when the site was chosen. A site that disappears or
+# changes platform is replaced by another of the same segment, noted in git history.
+br-institucional	petrobras.com.br	
+br-institucional	vale.com	
+br-institucional	embraer.com	
+br-institucional	ambev.com.br	
+br-institucional	weg.net	
+br-institucional	itau.com.br	
+br-institucional	bradesco.com.br	
+br-institucional	bb.com.br	
+br-institucional	nubank.com.br	
+br-institucional	totvs.com	
+br-institucional	localiza.com	
+br-institucional	suzano.com.br	
+br-institucional	gerdau.com.br	
+br-institucional	klabin.com.br	
+br-institucional	sicredi.com.br	
+br-ecommerce	farmrio.com.br	VTEX
+br-ecommerce	lojamor.com.br	VTEX
+br-ecommerce	electrolux.com.br	VTEX
+br-ecommerce	hisha.com.br	Nuvemshop
+br-ecommerce	lvstore.com.br	Nuvemshop
+br-ecommerce	agnescompany.com.br	Nuvemshop
+br-ecommerce	uzashoes.com.br	Tray
+br-ecommerce	fitoessencia.com.br	Tray
+br-ecommerce	casadascapotas.com.br	Tray
+br-ecommerce	www.anavibrand.com.br	Loja Integrada
+br-ecommerce	www.frutifica.com.br	Loja Integrada
+br-ecommerce	www.maximumshop.com.br	Loja Integrada
+br-ecommerce	insiderstore.com.br	Shopify
+br-ecommerce	pantys.com.br	Shopify
+br-ecommerce	sallve.com.br	Shopify
+br-wordpress	agenciamestre.com	WordPress
+br-wordpress	rockcontent.com	WordPress
+br-wordpress	agenciadupla.com	WordPress
+br-wordpress	www.vhsys.com.br	WordPress
+br-wordpress	www.mlabs.com.br	WordPress
+br-wordpress	www.kinghost.com.br	WordPress
+br-wordpress	www.bling.com.br	WordPress
+br-wordpress	www.reportei.com	WordPress
+br-wordpress	www.zenvia.com	WordPress
+br-wordpress	www.nuvemshop.com.br	WordPress
+br-noticias	g1.globo.com	
+br-noticias	folha.uol.com.br	
+br-noticias	estadao.com.br	
+br-noticias	uol.com.br	
+br-noticias	metropoles.com	
+br-gov-edu	www.gov.br	
+br-gov-edu	www.ibge.gov.br	
+br-gov-edu	www.usp.br	
+br-gov-edu	www.unicamp.br	
+br-gov-edu	www.ufpr.br	
+intl-grande	vercel.com	Next.js
+intl-grande	nextjs.org	Next.js
+intl-grande	nike.com	Next.js
+intl-grande	notion.com	Next.js
+intl-grande	airbnb.com	
+intl-grande	netflix.com	
+intl-grande	spotify.com	
+intl-grande	twitch.tv	
+intl-grande	discord.com	
+intl-grande	figma.com	
+intl-grande	target.com	
+intl-grande	washingtonpost.com	
+intl-grande	nytimes.com	
+intl-grande	tiktok.com	
+intl-grande	github.com	
+intl-ecommerce	allbirds.com	Shopify
+intl-ecommerce	gymshark.com	Shopify
+intl-ecommerce	kyliecosmetics.com	Shopify
+intl-ecommerce	glossier.com	Shopify
+intl-ecommerce	rothys.com	Shopify
+intl-ecommerce	porterandyork.com	WooCommerce
+intl-ecommerce	offermanwoodshop.com	WooCommerce
+intl-ecommerce	disruptiveyouth.com	WooCommerce
+intl-ecommerce	cbmadeinitaly.com	WooCommerce
+intl-ecommerce	cardcentral.co.nz	WooCommerce
+intl-ecommerce	coxandcox.co.uk	Magento
+intl-ecommerce	parfumerie.nl	Magento
+intl-ecommerce	mey.com	Magento
+intl-ecommerce	katieloxton.com	Magento
+intl-ecommerce	sunliner.de	Magento
+intl-saas	linear.app	
+intl-saas	supabase.com	
+intl-saas	posthog.com	
+intl-saas	cal.com	
+intl-saas	resend.com	
+intl-saas	loom.com	
+intl-saas	calendly.com	
+intl-saas	intercom.com	
+intl-saas	zapier.com	
+intl-saas	webflow.com	
+intl-dificil	incomplete-chain.badssl.com	cadeia incompleta
+intl-dificil	expired.badssl.com	certificado vencido
+intl-dificil	self-signed.badssl.com	autoassinado
+intl-dificil	untrusted-root.badssl.com	raiz não confiável
+intl-dificil	https://tls-v1-0.badssl.com:1010/	TLS 1.0
+intl-dificil	www.g2.com	desafio Cloudflare
+intl-dificil	www.indeed.com	desafio Cloudflare
+intl-dificil	www.hermes.com	DataDome
+intl-dificil	www.homedepot.com	Akamai
+intl-dificil	www.leboncoin.fr	DataDome
