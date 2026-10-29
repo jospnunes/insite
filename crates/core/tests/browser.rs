@@ -81,6 +81,38 @@ async fn loads_the_page_and_reads_what_signatures_need() {
     assert!(data.html.unwrap().contains("<h1 id=\"main\">Hello</h1>"));
 }
 
+/// A page that paints only after the quiet window following `load`, as a cold
+/// browser on a slow machine does.
+#[tokio::test]
+async fn waits_for_the_first_paint() {
+    if !chrome() {
+        return;
+    }
+    const LATE: &str = r#"<!doctype html><html><head><title>t</title></head><body><script>
+addEventListener('load', () => setTimeout(() => document.body.append('late'), 1500));
+</script></body></html>"#;
+    let server = Server::start(TlsMode::Plain, 0, |_| async move { ok(LATE) }).await;
+    let deadline = Deadline::new(tokio::time::Instant::now() + Duration::from_secs(30), None);
+    let mut browser = Browser::launch(None, &deadline).await.expect("the browser starts");
+    let visit = Visit {
+        mobile: false,
+        throttle: false,
+        user_agent_suffix: None,
+        accept_language: "en".into(),
+        js_paths: Vec::new(),
+        dom_properties: Vec::new(),
+    };
+    let data = browser
+        .visit(&format!("http://{}/", server.addr), &visit, &deadline)
+        .await;
+    browser.close().await;
+    assert_eq!(data.error, None);
+    assert!(data.quiet);
+    let metrics = data.metrics.expect("metrics");
+    assert!(metrics.fcp_ms.is_some_and(|f| f >= 1500.0), "{metrics:?}");
+    assert!(metrics.lcp_ms.is_some(), "{metrics:?}");
+}
+
 #[tokio::test]
 async fn a_navigation_error_is_reported_not_raised() {
     if !chrome() {

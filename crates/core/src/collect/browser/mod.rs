@@ -235,6 +235,7 @@ impl Browser {
         for method in ["Page.enable", "Network.enable", "Runtime.enable", "Log.enable"] {
             call(method, json!({})).await?;
         }
+        call("Page.setLifecycleEventsEnabled", json!({ "enabled": true })).await?;
         let major = self
             .product
             .split('/')
@@ -301,7 +302,10 @@ impl Browser {
             .instant()
             .checked_sub(EVALUATE_RESERVE)
             .unwrap_or(deadline.instant());
-        let quiet = self.wait_until_quiet(&session, stop_waiting, deadline, data).await;
+        let frame = navigated["frameId"].as_str().unwrap_or_default().to_owned();
+        let quiet = self
+            .wait_until_quiet(&session, &frame, stop_waiting, deadline, data)
+            .await;
         data.quiet = quiet;
 
         let expression = collector_expression(&visit.js_paths, &visit.dom_properties);
@@ -329,16 +333,21 @@ impl Browser {
     }
 
     /// Records resources and console errors until the page is quiet after
-    /// `load`, the quiet cap passes (false) or `until` comes.
+    /// `load` and its first contentful paint, the quiet cap passes (false) or
+    /// `until` comes. Waiting for the paint, as Lighthouse does, matters when
+    /// the browser paints late (a cold start on a slow machine): read before
+    /// it, the page has no FCP or LCP.
     async fn wait_until_quiet(
         &mut self,
         session: &str,
+        frame: &str,
         until: Instant,
         deadline: &Deadline,
         data: &mut BrowserData,
     ) -> bool {
         let started = Instant::now();
         let mut loaded_at: Option<Instant> = None;
+        let mut painted = false;
         let mut quiet_since: Option<Instant> = None;
         let mut inflight: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
         let mut tick = tokio::time::interval(Duration::from_millis(100));
@@ -354,6 +363,12 @@ impl Browser {
                         loaded_at = Some(Instant::now());
                         data.load_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
                     }
+                    if event.method == "Page.lifecycleEvent"
+                        && event.params["name"] == "firstContentfulPaint"
+                        && event.params["frameId"] == frame
+                    {
+                        painted = true;
+                    }
                 }
                 _ = tick.tick() => {}
                 _ = deadline.reached() => return false,
@@ -363,7 +378,7 @@ impl Browser {
                 return false;
             }
             let Some(loaded) = loaded_at else { continue };
-            if inflight.len() <= QUIET_INFLIGHT {
+            if painted && inflight.len() <= QUIET_INFLIGHT {
                 let since = *quiet_since.get_or_insert(now);
                 if now - since >= QUIET && now - loaded >= QUIET {
                     return true;
@@ -533,9 +548,13 @@ fn read_evaluation(v: &Value, data: &mut BrowserData) {
 /// windows, as Core Web Vitals defines CLS) and long tasks.
 const OBSERVER: &str = r#"(() => {
   if (window !== window.top || window.__insite) return;
-  const m = window.__insite = { cls: 0, longTasks: [] };
+  const m = window.__insite = { cls: 0, longTasks: [], pending: [] };
   const observe = (type, each) => {
-    try { new PerformanceObserver(list => list.getEntries().forEach(each)).observe({ type, buffered: true }); } catch (e) {}
+    try {
+      const o = new PerformanceObserver(list => list.getEntries().forEach(each));
+      o.observe({ type, buffered: true });
+      m.pending.push(() => o.takeRecords().forEach(each));
+    } catch (e) {}
   };
   observe('paint', e => { if (e.name === 'first-contentful-paint') m.fcp = e.startTime; });
   observe('largest-contentful-paint', e => { m.lcp = e.startTime; });
@@ -557,7 +576,9 @@ fn collector_expression(js_paths: &[String], dom_properties: &[(String, String)]
     let props = serde_json::to_string(dom_properties).expect("strings serialize");
     format!(
         r#"(async () => {{
-  const m = window.__insite || {{ cls: 0, longTasks: [] }};
+  const m = window.__insite || {{ cls: 0, longTasks: [], pending: [] }};
+  // Entries already recorded whose observer callback has not run yet.
+  for (const take of m.pending) take();
   const text = v => ['string', 'number', 'boolean'].includes(typeof v) ? String(v) : '';
   const nav = performance.getEntriesByType('navigation')[0];
   const fcp = m.fcp ?? null;
