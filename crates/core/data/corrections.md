@@ -3,8 +3,10 @@
 `corrections.json` replaces webappanalyzer technologies that misfire, by name,
 on top of whichever base is in use (embedded or from `insite update`). Each
 entry is the upstream definition with one change. They were found on the
-hand-labeled sites (`bench/labels.tsv`, 2026-10-29) and should go once upstream
-fixes them.
+hand-labeled sites (`bench/labels.tsv`, 2026-10-29) and are not sent upstream.
+Since each entry replaces the whole definition, check on every update of the
+embedded base whether upstream changed these technologies, and carry the
+change over or drop the entry.
 
 | Technology | Change | Why |
 | --- | --- | --- |
