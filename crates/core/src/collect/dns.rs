@@ -5,15 +5,16 @@
 //! still pending at that point keeps running so the report can say whether the
 //! host has IPv6 without holding up the connection.
 
-use std::net::{IpAddr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig};
-use hickory_resolver::lookup::Lookup;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
 use hickory_resolver::net::{DnsError as HickoryDnsError, NetError, NoRecords};
-use hickory_resolver::proto::op::ResponseCode;
-use hickory_resolver::proto::rr::{Name, RData, RecordType};
+use hickory_resolver::proto::op::{Query, ResponseCode};
+use hickory_resolver::proto::rr::{Name, RData, Record, RecordType};
+use hickory_resolver::recursor::{Recursor, RecursorOptions};
 use hickory_resolver::{ResolverBuilder, TokioResolver};
 use tokio::task::JoinHandle;
 
@@ -22,9 +23,31 @@ use crate::snapshot::{DnsResult, FailureKind, HostResolution, ResolutionSource};
 /// How long to wait for AAAA once A has answered (RFC 8305, section 3).
 const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
 
+/// The root servers' IPv4 addresses (IANA root hints), where iterative
+/// resolution starts.
+const ROOT_SERVERS: [Ipv4Addr; 13] = [
+    Ipv4Addr::new(198, 41, 0, 4),
+    Ipv4Addr::new(170, 247, 170, 2),
+    Ipv4Addr::new(192, 33, 4, 12),
+    Ipv4Addr::new(199, 7, 91, 13),
+    Ipv4Addr::new(192, 203, 230, 10),
+    Ipv4Addr::new(192, 5, 5, 241),
+    Ipv4Addr::new(192, 112, 36, 4),
+    Ipv4Addr::new(198, 97, 190, 53),
+    Ipv4Addr::new(192, 36, 148, 17),
+    Ipv4Addr::new(192, 58, 128, 30),
+    Ipv4Addr::new(193, 0, 14, 129),
+    Ipv4Addr::new(199, 7, 83, 42),
+    Ipv4Addr::new(202, 12, 27, 33),
+];
+
 #[derive(Clone)]
 pub struct Resolver {
     inner: TokioResolver,
+    /// Iterative resolution from the root servers, to find a zone's own servers
+    /// without the system resolver that just failed. Absent in the tests, which
+    /// have no root.
+    iterative: Option<Arc<Recursor<TokioRuntimeProvider>>>,
     /// Where zones' own name servers listen: 53, or a local port in the tests.
     authoritative_port: u16,
 }
@@ -60,7 +83,13 @@ impl Resolver {
     pub fn from_system() -> Result<Self, String> {
         let builder =
             TokioResolver::builder_tokio().map_err(|e| format!("cannot read the system DNS configuration: {e}"))?;
-        Self::finish(builder, ResolveHosts::Always)
+        let mut resolver = Self::finish(builder, ResolveHosts::Always)?;
+        let roots = ROOT_SERVERS.map(IpAddr::V4);
+        resolver.iterative =
+            Recursor::with_options(&roots, RecursorOptions::default(), TokioRuntimeProvider::default())
+                .ok()
+                .map(Arc::new);
+        Ok(resolver)
     }
 
     /// Sends every query to one name server. Tests point it at a local server.
@@ -114,6 +143,7 @@ impl Resolver {
             .map_err(|e| format!("cannot build the DNS resolver: {e}"))?;
         Ok(Resolver {
             inner,
+            iterative: None,
             authoritative_port: 53,
         })
     }
@@ -181,7 +211,7 @@ impl Resolver {
         };
         match self.inner.lookup(name, record_type).await {
             Ok(lookup) => {
-                let records = presentation(&lookup, record_type);
+                let records = presentation(lookup.answers(), record_type);
                 if records.is_empty() {
                     DnsResult::Empty
                 } else {
@@ -191,6 +221,51 @@ impl Resolver {
             Err(e) if e.is_nx_domain() => DnsResult::NxDomain,
             Err(e) if e.is_no_records_found() => DnsResult::Empty,
             Err(e) => DnsResult::Failed(e.to_string()),
+        }
+    }
+
+    /// A query for finding a zone's servers. The system resolver races iterative
+    /// resolution from the root servers, and the first answer wins: the system
+    /// resolver is quicker while it works, and the root does not depend on it when
+    /// it fails. Without iterative resolution (the tests), only the system resolver
+    /// is asked.
+    pub async fn query_for_servers(&self, name: &str, record_type: RecordType) -> DnsResult {
+        let Some(recursor) = &self.iterative else {
+            return self.query(name, record_type).await;
+        };
+        let iterative = async {
+            let name = match fqdn(name) {
+                Ok(name) => name,
+                Err(e) => return DnsResult::Failed(e),
+            };
+            match recursor
+                .resolve(Query::query(name, record_type), Instant::now(), false)
+                .await
+            {
+                Ok(message) => {
+                    let records = presentation(&message.answers, record_type);
+                    if records.is_empty() {
+                        DnsResult::Empty
+                    } else {
+                        DnsResult::Records(records)
+                    }
+                }
+                Err(e) if e.is_nx_domain() => DnsResult::NxDomain,
+                Err(e) if e.is_no_records_found() => DnsResult::Empty,
+                Err(e) => DnsResult::Failed(e.to_string()),
+            }
+        };
+        let system = self.query(name, record_type);
+        tokio::pin!(system, iterative);
+        tokio::select! {
+            result = &mut system => match result {
+                DnsResult::Failed(_) => iterative.await,
+                result => result,
+            },
+            result = &mut iterative => match result {
+                DnsResult::Failed(_) => system.await,
+                result => result,
+            },
         }
     }
 
@@ -205,7 +280,7 @@ impl Resolver {
         };
         match self.inner.lookup(name, record_type).await {
             Ok(lookup) => {
-                let records = presentation(&lookup, record_type);
+                let records = presentation(lookup.answers(), record_type);
                 if records.is_empty() {
                     DnsResult::Failed("the answer points to another name".into())
                 } else {
@@ -314,9 +389,8 @@ fn fqdn(name: &str) -> Result<Name, String> {
 
 /// The records of the asked type in presentation format, without the trailing dot;
 /// the strings of a TXT record are joined.
-fn presentation(lookup: &Lookup, record_type: RecordType) -> Vec<String> {
-    lookup
-        .answers()
+fn presentation(answers: &[Record], record_type: RecordType) -> Vec<String> {
+    answers
         .iter()
         .filter(|r| r.record_type() == record_type)
         .map(|r| match &r.data {

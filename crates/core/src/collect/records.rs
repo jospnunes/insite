@@ -315,7 +315,10 @@ async fn zone_of(
         let resolver = resolver.clone();
         let deadline = deadline.clone();
         set.spawn(async move {
-            match deadline.run_until(until, resolver.query(&zone, RecordType::NS)).await {
+            match deadline
+                .run_until(until, resolver.query_for_servers(&zone, RecordType::NS))
+                .await
+            {
                 Ok(DnsResult::Records(ns)) => Some((order, zone, ns)),
                 _ => None,
             }
@@ -348,7 +351,10 @@ async fn zone_servers(
         let resolver = resolver.clone();
         let deadline = deadline.clone();
         lookups.spawn(async move {
-            let ip = match deadline.run_until(until, resolver.query(&host, RecordType::A)).await {
+            let ip = match deadline
+                .run_until(until, resolver.query_for_servers(&host, RecordType::A))
+                .await
+            {
                 Ok(DnsResult::Records(ips)) => ips.iter().find_map(|ip| ip.parse::<IpAddr>().ok()),
                 _ => None,
             };
