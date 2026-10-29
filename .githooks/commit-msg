@@ -1,0 +1,15 @@
+#!/bin/sh
+# Commit messages follow Conventional Commits: `type(scope): subject`, at most
+# 100 characters on the first line. Enable with `git config core.hooksPath .githooks`.
+first=$(head -n 1 "$1")
+case "$first" in
+  Merge\ * | Revert\ * | fixup!\ * | squash!\ * | amend!\ *) exit 0 ;;
+esac
+if ! printf '%s\n' "$first" | grep -Eq '^(build|chore|ci|docs|feat|fix|perf|refactor|revert|style|test)(\([a-z0-9._/-]+\))?!?: [^ ].*$'; then
+  echo "commit-msg: the first line must follow Conventional Commits, such as 'fix(dns): keep failed queries unmeasured'" >&2
+  exit 1
+fi
+if [ "${#first}" -gt 100 ]; then
+  echo "commit-msg: the first line has ${#first} characters; keep it within 100" >&2
+  exit 1
+fi

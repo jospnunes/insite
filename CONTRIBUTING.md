@@ -24,6 +24,10 @@ cargo test
 
 Browser tests run when `CHROME_PATH` points to Chrome or Chromium.
 
+Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`fix(dns): …`, `feat(cli): …`); `git config core.hooksPath .githooks` makes git
+check them.
+
 Embedded data is regenerated with the scripts in `scripts/` (Python standard
 library only); new signatures belong upstream in
 [webappanalyzer](https://github.com/enthec/webappanalyzer).
