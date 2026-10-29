@@ -26,10 +26,25 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
+    env:
+      HAS_FIXTURES_KEY: ${{ secrets.INSITE_FIXTURES_KEY != '' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # The hand-labeled snapshots hold third-party pages, so they live in a
+      # private repository; without its key (pull requests from forks) the
+      # precision test passes without running.
+      - name: Check out the fixtures
+        if: runner.os == 'Linux' && env.HAS_FIXTURES_KEY == 'true'
+        uses: actions/checkout@v4
+        with:
+          repository: jospnunes/insite-fixtures
+          ssh-key: ${{ secrets.INSITE_FIXTURES_KEY }}
+          path: fixtures
+      - name: Point the tests to the fixtures
+        if: runner.os == 'Linux' && env.HAS_FIXTURES_KEY == 'true'
+        run: echo "INSITE_FIXTURES=$GITHUB_WORKSPACE/fixtures" >> "$GITHUB_ENV"
       # The browser tests run where a Chrome is preinstalled (the Linux and
       # macOS images); elsewhere they pass without running.
       - name: Find Chrome
