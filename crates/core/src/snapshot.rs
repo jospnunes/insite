@@ -173,6 +173,9 @@ pub struct DnsAnswer {
     pub name: String,
     pub record_type: String,
     pub result: DnsResult,
+    /// The zone's name server that answered after the system resolver failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub authoritative: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

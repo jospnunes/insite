@@ -680,6 +680,9 @@ fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
             if !d.failed_queries.is_empty() {
                 row(out, "failed", &d.failed_queries.join(", "));
             }
+            if !d.authoritative_queries.is_empty() {
+                row(out, "direct", &d.authoritative_queries.join(", "));
+            }
         }
     }
 

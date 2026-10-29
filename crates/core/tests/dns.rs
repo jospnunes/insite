@@ -4,6 +4,7 @@ mod server;
 
 use std::time::Duration;
 
+use hickory_resolver::proto::rr::RecordType;
 use insite_core::analyze::analyze;
 use insite_core::collect::deadline::Deadline;
 use insite_core::collect::dns::Resolver;
@@ -105,6 +106,152 @@ async fn server_failures_are_unknown_not_missing() {
     let ids: Vec<&str> = module.findings.iter().map(|f| f.id).collect();
     assert!(!ids.contains(&"mail.dmarc.missing"), "{ids:?}");
     assert_eq!(module.status, Status::Partial);
+}
+
+/// Home routers often truncate large answers and refuse TCP, or reject DS
+/// queries. What the system resolver could not answer is asked of the zone's own
+/// name servers.
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_queries_are_asked_of_the_authoritative_servers() {
+    let authoritative = serve(
+        Zone::default()
+            .txt("exemplo.test", "v=spf1 -all")
+            .txt("_dmarc.exemplo.test", "v=DMARC1; p=reject"),
+    )
+    .await;
+    let system = Zone::default()
+        .a("www.exemplo.test", "192.0.2.10")
+        .ns("exemplo.test", "ns1.exemplo.test.")
+        .a("ns1.exemplo.test", "127.0.0.1")
+        .ns("test", "ns.nic.test.")
+        .a("ns.nic.test", "127.0.0.1")
+        .failing_type("exemplo.test", RecordType::TXT)
+        .failing_type("exemplo.test", RecordType::DS)
+        .failing("_dmarc.exemplo.test");
+    let resolver = Resolver::with_nameserver(serve(system).await)
+        .unwrap()
+        .with_authoritative_port(authoritative.port());
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+
+    let answer = |name: &str, rtype: &str| {
+        records
+            .answers
+            .iter()
+            .find(|a| a.name == name && a.record_type == rtype)
+            .unwrap()
+    };
+    let txt = answer("exemplo.test", "TXT");
+    assert_eq!(txt.result, DnsResult::Records(vec!["v=spf1 -all".into()]));
+    assert_eq!(txt.authoritative.as_deref(), Some("ns1.exemplo.test"));
+    assert_eq!(
+        answer("_dmarc.exemplo.test", "TXT").authoritative.as_deref(),
+        Some("ns1.exemplo.test")
+    );
+    // DS lives in the parent zone, so its name servers are the ones asked.
+    let ds = answer("exemplo.test", "DS");
+    assert_eq!(ds.result, DnsResult::Empty);
+    assert_eq!(ds.authoritative.as_deref(), Some("ns.nic.test"));
+    // What the system resolver answered is left alone.
+    assert_eq!(answer("www.exemplo.test", "A").authoritative, None);
+
+    let mut snap = snapshot();
+    snap.dns = vec![records];
+    let d = &analyze(&snap).modules.dns.data.unwrap().domains[0];
+    assert!(d.failed_queries.is_empty(), "{:?}", d.failed_queries);
+    assert_eq!(
+        d.authoritative_queries,
+        [
+            "exemplo.test TXT @ns1.exemplo.test",
+            "exemplo.test DS @ns.nic.test",
+            "_dmarc.exemplo.test TXT @ns1.exemplo.test"
+        ]
+    );
+}
+
+/// SPF services build names like `_spf.exemplo_test._d.provider.test`: an
+/// underscore inside a label is valid in DNS, even if not in a host name.
+#[tokio::test(flavor = "multi_thread")]
+async fn underscores_inside_labels_are_queried() {
+    let zone = Zone::default()
+        .a("www.exemplo.test", "192.0.2.10")
+        .txt("exemplo.test", "v=spf1 include:_spf.exemplo_test._d.provider.test -all")
+        .txt("_spf.exemplo_test._d.provider.test", "v=spf1 ip4:192.0.2.0/24 -all");
+    let resolver = Resolver::with_nameserver(serve(zone).await).unwrap();
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+
+    assert_eq!(
+        records.records("_spf.exemplo_test._d.provider.test", "TXT"),
+        ["v=spf1 ip4:192.0.2.0/24 -all"]
+    );
+}
+
+/// A name in a delegated subzone is asked of the subzone's servers, not of the
+/// registrable domain's, which would only refer to them.
+#[tokio::test(flavor = "multi_thread")]
+async fn delegated_subzones_are_asked_of_their_own_servers() {
+    let authoritative =
+        serve(Zone::default().txt("__spf.campaign.provider.test", "v=spf1 ip4:192.0.2.0/24 -all")).await;
+    let system = Zone::default()
+        .a("www.exemplo.test", "192.0.2.10")
+        .txt("exemplo.test", "v=spf1 include:__spf.campaign.provider.test -all")
+        .ns("provider.test", "ns1.provider.test.")
+        .a("ns1.provider.test", "127.0.0.1")
+        .ns("campaign.provider.test", "ns.campaign.provider.test.")
+        .a("ns.campaign.provider.test", "127.0.0.1")
+        .failing_type("__spf.campaign.provider.test", RecordType::TXT);
+    let resolver = Resolver::with_nameserver(serve(system).await)
+        .unwrap()
+        .with_authoritative_port(authoritative.port());
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+
+    let include = records
+        .answers
+        .iter()
+        .find(|a| a.name == "__spf.campaign.provider.test")
+        .unwrap();
+    assert!(matches!(include.result, DnsResult::Records(_)), "{:?}", include.result);
+    assert_eq!(include.authoritative.as_deref(), Some("ns.campaign.provider.test"));
+}
+
+/// A resolver that answers nothing leaves every query unmeasured within the query
+/// timeout: looking for the zone's servers through it must not hold the DNS phase
+/// until the global deadline.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_silent_resolver_ends_on_the_query_timeout() {
+    let silent = tokio::net::UdpSocket::bind("127.0.0.1:0").await.unwrap();
+    let resolver = Resolver::with_nameserver(silent.local_addr().unwrap()).unwrap();
+    let started = std::time::Instant::now();
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+
+    assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+    assert!(
+        records.answers.iter().all(|a| matches!(a.result, DnsResult::Failed(_))),
+        "{:?}",
+        records.answers
+    );
+}
+
+/// A negative answer without the zone's SOA is a referral, not proof of absence.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_referral_is_not_an_absence() {
+    let authoritative = serve(Zone::default().txt("exemplo.test", "v=spf1 -all").no_soa()).await;
+    let system = Zone::default()
+        .a("www.exemplo.test", "192.0.2.10")
+        .ns("exemplo.test", "ns1.exemplo.test.")
+        .a("ns1.exemplo.test", "127.0.0.1")
+        .failing("_dmarc.exemplo.test");
+    let resolver = Resolver::with_nameserver(serve(system).await)
+        .unwrap()
+        .with_authoritative_port(authoritative.port());
+    let records = records::collect(&resolver, "www.exemplo.test", DomainRole::Input, &deadline()).await;
+
+    let dmarc = records
+        .answers
+        .iter()
+        .find(|a| a.name == "_dmarc.exemplo.test")
+        .unwrap();
+    assert!(matches!(dmarc.result, DnsResult::Failed(_)), "{:?}", dmarc.result);
+    assert_eq!(dmarc.authoritative, None);
 }
 
 #[tokio::test(flavor = "multi_thread")]

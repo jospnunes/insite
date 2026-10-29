@@ -9,8 +9,11 @@ use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use hickory_resolver::config::{NameServerConfig, ResolveHosts, ResolverConfig};
+use hickory_resolver::lookup::Lookup;
 use hickory_resolver::net::runtime::TokioRuntimeProvider;
-use hickory_resolver::proto::rr::{RData, RecordType};
+use hickory_resolver::net::{DnsError as HickoryDnsError, NetError, NoRecords};
+use hickory_resolver::proto::op::ResponseCode;
+use hickory_resolver::proto::rr::{Name, RData, RecordType};
 use hickory_resolver::{ResolverBuilder, TokioResolver};
 use tokio::task::JoinHandle;
 
@@ -22,6 +25,8 @@ const RESOLUTION_DELAY: Duration = Duration::from_millis(50);
 #[derive(Clone)]
 pub struct Resolver {
     inner: TokioResolver,
+    /// Where zones' own name servers listen: 53, or a local port in the tests.
+    authoritative_port: u16,
 }
 
 pub struct DnsError {
@@ -55,7 +60,7 @@ impl Resolver {
     pub fn from_system() -> Result<Self, String> {
         let builder =
             TokioResolver::builder_tokio().map_err(|e| format!("cannot read the system DNS configuration: {e}"))?;
-        Self::finish(builder)
+        Self::finish(builder, ResolveHosts::Always)
     }
 
     /// Sends every query to one name server. Tests point it at a local server.
@@ -65,22 +70,46 @@ impl Resolver {
             connection.port = addr.port();
         }
         let config = ResolverConfig::from_name_servers(vec![server]);
-        Self::finish(TokioResolver::builder_with_config(
-            config,
-            TokioRuntimeProvider::default(),
-        ))
+        Self::finish(
+            TokioResolver::builder_with_config(config, TokioRuntimeProvider::default()),
+            ResolveHosts::Always,
+        )
+    }
+
+    /// Tests run the zones' name servers on a local port.
+    pub fn with_authoritative_port(mut self, port: u16) -> Self {
+        self.authoritative_port = port;
+        self
+    }
+
+    /// Asks one of a zone's own name servers directly, over UDP and then TCP when
+    /// the answer is truncated, without asking it to recurse.
+    pub fn authoritative(&self, ip: IpAddr) -> Result<Self, String> {
+        let mut server = NameServerConfig::udp_and_tcp(ip);
+        for connection in &mut server.connections {
+            connection.port = self.authoritative_port;
+        }
+        let config = ResolverConfig::from_name_servers(vec![server]);
+        let mut builder = TokioResolver::builder_with_config(config, TokioRuntimeProvider::default());
+        builder.options_mut().recursion_desired = false;
+        let mut resolver = Self::finish(builder, ResolveHosts::Never)?;
+        resolver.authoritative_port = self.authoritative_port;
+        Ok(resolver)
     }
 
     /// Our own retry layer decides on retries, so hickory gets one attempt per query.
-    fn finish(mut builder: ResolverBuilder<TokioRuntimeProvider>) -> Result<Self, String> {
+    fn finish(mut builder: ResolverBuilder<TokioRuntimeProvider>, hosts: ResolveHosts) -> Result<Self, String> {
         let opts = builder.options_mut();
-        opts.use_hosts_file = ResolveHosts::Always;
+        opts.use_hosts_file = hosts;
         opts.attempts = 1;
         opts.timeout = Duration::from_secs(2);
         let inner = builder
             .build()
             .map_err(|e| format!("cannot build the DNS resolver: {e}"))?;
-        Ok(Resolver { inner })
+        Ok(Resolver {
+            inner,
+            authoritative_port: 53,
+        })
     }
 
     pub async fn resolve(&self, host: &str) -> Result<Resolved, DnsError> {
@@ -138,21 +167,15 @@ impl Resolver {
         })
     }
 
-    /// One query, recorded as found, empty, nonexistent or failed. Names are made
-    /// fully qualified so the resolver's search list never applies.
+    /// One query, recorded as found, empty, nonexistent or failed.
     pub async fn query(&self, name: &str, record_type: RecordType) -> DnsResult {
-        let fqdn = format!("{}.", name.trim_end_matches('.'));
-        match self.inner.lookup(fqdn.as_str(), record_type).await {
+        let name = match fqdn(name) {
+            Ok(name) => name,
+            Err(e) => return DnsResult::Failed(e),
+        };
+        match self.inner.lookup(name, record_type).await {
             Ok(lookup) => {
-                let records: Vec<String> = lookup
-                    .answers()
-                    .iter()
-                    .filter(|r| r.record_type() == record_type)
-                    .map(|r| match &r.data {
-                        RData::TXT(txt) => txt.txt_data.iter().map(|part| String::from_utf8_lossy(part)).collect(),
-                        other => other.to_string().trim_end_matches('.').to_owned(),
-                    })
-                    .collect();
+                let records = presentation(&lookup, record_type);
                 if records.is_empty() {
                     DnsResult::Empty
                 } else {
@@ -161,6 +184,37 @@ impl Resolver {
             }
             Err(e) if e.is_nx_domain() => DnsResult::NxDomain,
             Err(e) if e.is_no_records_found() => DnsResult::Empty,
+            Err(e) => DnsResult::Failed(e.to_string()),
+        }
+    }
+
+    /// One query to a zone's own name server, stricter than [`Self::query`]. An
+    /// absence counts only with the zone's SOA as proof: without it the answer is a
+    /// referral to a delegated zone. A CNAME without the records it leads to was not
+    /// followed, so it is no answer either.
+    pub async fn query_authoritative(&self, name: &str, record_type: RecordType) -> DnsResult {
+        let name = match fqdn(name) {
+            Ok(name) => name,
+            Err(e) => return DnsResult::Failed(e),
+        };
+        match self.inner.lookup(name, record_type).await {
+            Ok(lookup) => {
+                let records = presentation(&lookup, record_type);
+                if records.is_empty() {
+                    DnsResult::Failed("the answer points to another name".into())
+                } else {
+                    DnsResult::Records(records)
+                }
+            }
+            Err(NetError::Dns(HickoryDnsError::NoRecordsFound(NoRecords {
+                soa: Some(_),
+                response_code,
+                ..
+            }))) => match response_code {
+                ResponseCode::NXDomain => DnsResult::NxDomain,
+                _ => DnsResult::Empty,
+            },
+            Err(e) if e.is_no_records_found() => DnsResult::Failed("referred to another name server".into()),
             Err(e) => DnsResult::Failed(e.to_string()),
         }
     }
@@ -205,6 +259,33 @@ struct LookupError {
     message: String,
     no_records: bool,
     retryable: bool,
+}
+
+/// Fully qualified, so the resolver's search list never applies. ASCII names are
+/// taken as they are: the IDNA rules for host names reject the underscores that
+/// SPF services put inside labels (`_spf.exemplo_com._d.provider.com`).
+fn fqdn(name: &str) -> Result<Name, String> {
+    let fqdn = format!("{}.", name.trim_end_matches('.'));
+    let parsed = if fqdn.is_ascii() {
+        Name::from_ascii(&fqdn)
+    } else {
+        Name::from_utf8(&fqdn)
+    };
+    parsed.map_err(|e| format!("invalid name {fqdn}: {e}"))
+}
+
+/// The records of the asked type in presentation format, without the trailing dot;
+/// the strings of a TXT record are joined.
+fn presentation(lookup: &Lookup, record_type: RecordType) -> Vec<String> {
+    lookup
+        .answers()
+        .iter()
+        .filter(|r| r.record_type() == record_type)
+        .map(|r| match &r.data {
+            RData::TXT(txt) => txt.txt_data.iter().map(|part| String::from_utf8_lossy(part)).collect(),
+            other => other.to_string().trim_end_matches('.').to_owned(),
+        })
+        .collect()
 }
 
 async fn lookup(resolver: TokioResolver, host: String, record_type: RecordType) -> Result<Vec<IpAddr>, LookupError> {

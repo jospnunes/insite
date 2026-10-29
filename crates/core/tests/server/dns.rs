@@ -6,17 +6,19 @@ use std::str::FromStr;
 use std::sync::Arc;
 
 use hickory_resolver::proto::op::{Message, ResponseCode};
-use hickory_resolver::proto::rr::rdata::{A, CAA, MX, NS, TXT};
-use hickory_resolver::proto::rr::{Name, RData, Record};
+use hickory_resolver::proto::rr::rdata::{A, CAA, MX, NS, SOA, TXT};
+use hickory_resolver::proto::rr::{Name, RData, Record, RecordType};
 use tokio::net::UdpSocket;
 
 /// Zone data: name (no trailing dot) to records. A name present with no record of
 /// the asked type answers NODATA; an absent name answers NXDOMAIN; a name listed
-/// in `failing` answers SERVFAIL.
+/// in `failing` answers SERVFAIL, for every type or only for the one given.
 #[derive(Default)]
 pub struct Zone {
     records: HashMap<String, Vec<RData>>,
-    failing: Vec<String>,
+    failing: Vec<(String, Option<RecordType>)>,
+    /// Negative answers without the SOA, as in a referral to another server.
+    no_soa: bool,
 }
 
 impl Zone {
@@ -49,12 +51,33 @@ impl Zone {
     }
 
     pub fn failing(mut self, name: &str) -> Self {
-        self.failing.push(name.to_owned());
+        self.failing.push((name.to_owned(), None));
+        self
+    }
+
+    pub fn failing_type(mut self, name: &str, record_type: RecordType) -> Self {
+        self.failing.push((name.to_owned(), Some(record_type)));
+        self
+    }
+
+    pub fn no_soa(mut self) -> Self {
+        self.no_soa = true;
         self
     }
 
     fn add(&mut self, name: &str, data: RData) {
         self.records.entry(name.to_ascii_lowercase()).or_default().push(data);
+    }
+
+    /// A negative answer carries the zone's SOA, the proof an authoritative server
+    /// gives. The top-level label stands in for the zone.
+    fn negative(&self, mut m: Message, name: &Name) -> Message {
+        if !self.no_soa {
+            let zone = name.trim_to(1);
+            let soa = SOA::new(zone.clone(), zone.clone(), 1, 3600, 600, 86400, 60);
+            m.add_authority(Record::from_rdata(zone, 60, RData::SOA(soa)));
+        }
+        m
     }
 
     fn answer(&self, query: &Message) -> Message {
@@ -64,17 +87,25 @@ impl Zone {
             return Message::error_msg(id, op, ResponseCode::FormErr);
         };
         let name = q.name().to_string().trim_end_matches('.').to_ascii_lowercase();
-        let mut response = if self.failing.contains(&name) {
+        let fails = self
+            .failing
+            .iter()
+            .any(|(n, t)| *n == name && t.is_none_or(|t| t == q.query_type()));
+        let mut response = if fails {
             Message::error_msg(id, op, ResponseCode::ServFail)
         } else {
             match self.records.get(&name) {
-                None => Message::error_msg(id, op, ResponseCode::NXDomain),
+                None => self.negative(Message::error_msg(id, op, ResponseCode::NXDomain), q.name()),
                 Some(records) => {
                     let mut m = Message::response(id, op);
                     for data in records.iter().filter(|d| d.record_type() == q.query_type()) {
                         m.add_answer(Record::from_rdata(q.name().clone(), 60, data.clone()));
                     }
-                    m
+                    if m.answers.is_empty() {
+                        self.negative(m, q.name())
+                    } else {
+                        m
+                    }
                 }
             }
         };

@@ -41,6 +41,9 @@ pub struct DomainReport {
     pub bimi: bool,
     /// Queries that failed, so absence was not established for them.
     pub failed_queries: Vec<String>,
+    /// Queries the system resolver failed and the zone's own name servers
+    /// answered, as `name type @server`.
+    pub authoritative_queries: Vec<String>,
     /// False when the resolver looks like it filters queries: then a missing
     /// record says nothing, and only the records that came back count.
     pub absences_reliable: bool,
@@ -157,6 +160,14 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
         .filter(|a| matches!(a.result, DnsResult::Failed(_)))
         .map(|a| format!("{} {}", a.name, a.record_type))
         .collect();
+    let authoritative_queries: Vec<String> = records
+        .answers
+        .iter()
+        .filter_map(|a| {
+            let server = a.authoritative.as_ref()?;
+            Some(format!("{} {} @{server}", a.name, a.record_type))
+        })
+        .collect();
 
     let spf = spf_report(records, findings);
     let dmarc = dmarc_report(records, findings);
@@ -242,6 +253,7 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
         tls_rpt: txt_has(&format!("_smtp._tls.{reg}"), "v=tlsrptv1"),
         bimi: txt_has(&format!("default._bimi.{reg}"), "v=bimi1"),
         failed_queries,
+        authoritative_queries,
         absences_reliable: true,
     }
 }
@@ -436,6 +448,7 @@ mod tests {
             } else {
                 DnsResult::Records(records.iter().map(|r| r.to_string()).collect())
             },
+            authoritative: None,
         }
     }
 
@@ -540,6 +553,7 @@ mod tests {
             name: "exemplo.com.br".into(),
             record_type: "TXT".into(),
             result: DnsResult::Failed("timeout".into()),
+            authoritative: None,
         });
         let mut findings = Vec::new();
         let d = domain(&rec, &mut findings);
