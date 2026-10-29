@@ -540,7 +540,7 @@ fn dns_line(d: &DomainReport, s: &Style) -> String {
         (false, true) => parts.push("no DNSSEC".to_owned()),
         (false, false) => unknown.push("DNSSEC"),
     }
-    match (d.caa.is_empty(), d.absences_reliable) {
+    match (d.caa.is_empty(), d.caa_absence_known()) {
         (false, _) => parts.push("CAA".to_owned()),
         (true, true) => parts.push("no CAA".to_owned()),
         (true, false) => unknown.push("CAA"),

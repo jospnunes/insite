@@ -59,6 +59,12 @@ impl DomainReport {
                 .iter()
                 .any(|q| *q == format!("{name} {record_type}"))
     }
+
+    /// Whether "no CAA" was established: none of the queries climbing from the host
+    /// to the registrable domain failed.
+    pub fn caa_absence_known(&self) -> bool {
+        self.absences_reliable && !self.failed_queries.iter().any(|q| q.ends_with(" CAA"))
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -544,6 +550,20 @@ mod tests {
         assert!(d.null_mx);
         assert_eq!(d.mx, ["0 ."]);
         assert_eq!(d.mail_provider, None);
+    }
+
+    #[test]
+    fn failed_caa_is_not_measured() {
+        let mut rec = domain_records(vec![answer("exemplo.com.br", "CAA", &[])]);
+        rec.answers.push(DnsAnswer {
+            name: "www.exemplo.com.br".into(),
+            record_type: "CAA".into(),
+            result: DnsResult::Failed("timeout".into()),
+            authoritative: None,
+        });
+        let d = domain(&rec, &mut Vec::new());
+        assert!(d.caa.is_empty());
+        assert!(!d.caa_absence_known());
     }
 
     #[test]
