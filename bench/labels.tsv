@@ -1,0 +1,454 @@
+# Hand-labeled detections on 20 sites of bench/sites.tsv (2026-10-29), insite at 6458ef9.
+# verdict: correct, wrong (the evidence does not show the technology) or uncertain.
+# Domain-verification TXT records and SPF includes count as use of the service.
+site	technology	version	verdict	reason
+petrobras.com.br	Microsoft 365		correct	MX petrobras-com-br.mail.protection.outlook.com
+petrobras.com.br	YUI Doc		wrong	body class yui3-skin-sam is the YUI 3 skin class on a Liferay page; YUI Doc is a build-time API doc generator
+petrobras.com.br	Salesforce		correct	SPF include:_spf.salesforce.com (mail sent via Salesforce)
+petrobras.com.br	Bootstrap		correct	bootstrap.bundle.min.js in script combo URL
+petrobras.com.br	Amazon Web Services		correct	NS awsdns (Route 53), S3 buckets in CSP
+petrobras.com.br	Google Cloud		correct	implied by Google Cloud CDN; A 34.102.155.121 is Google LB, via: 1.1 google
+petrobras.com.br	React		uncertain	only a "react" entry in the Liferay import map (/o/frontend-js-react-web/.../react.js); no react script loaded in page
+petrobras.com.br	Amazon Route 53		correct	4 NS awsdns-* records
+petrobras.com.br	Amazon S3		correct	CSP lists s3-cdn-agencia-...s3.sa-east-1.amazonaws.com bucket as content origin
+petrobras.com.br	Amazon SES		correct	SPF include:amazonses.com (spf-include)
+petrobras.com.br	Anthropic		correct	dns-verification anthropic-domain-verification TXT
+petrobras.com.br	Cursor		correct	dns-verification cursor-domain-verification TXT
+petrobras.com.br	Dynatrace		correct	dns-verification Dynatrace-site-verification TXT
+petrobras.com.br	Google Cloud CDN		correct	via: 1.1 google plus age: 619 and public cache-control behind Google LB IP
+petrobras.com.br	Google Tag Manager		correct	<!-- Google Tag Manager --> with GTM-W7XZJD9M snippet
+petrobras.com.br	HSTS		correct	strict-transport-security header present
+petrobras.com.br	Let's Encrypt		correct	cert issuer Let's Encrypt (YR2) in report.json
+petrobras.com.br	jQuery		correct	/o/frontend-js-jquery-web/jquery/jquery.min.js in script combo
+petrobras.com.br	HTTP/3		correct	alt-svc: h3=":443"
+petrobras.com.br	IBM		correct	dns-verification ibmid= TXT
+petrobras.com.br	Miro		correct	dns-verification miro-verification TXT
+petrobras.com.br	Open Graph		correct	og: meta tags present
+petrobras.com.br	Popper		correct	jquery/popper.min.js in Liferay script combo
+petrobras.com.br	ServiceNow		correct	link to own tenant petrobras.service-now.com/familiapetrobras
+nubank.com.br	Cart Functionality		wrong	a[href*=/cart] matched only href="/nu/cartao" (Portuguese for card), no cart/checkout link
+nubank.com.br	DatoCMS		correct	images from www.datocms-assets.com in html and Link header
+nubank.com.br	Next.js		correct	x-powered-by: Next.js, _next/static assets, self.__next_f
+nubank.com.br	Apple iCloud Mail		wrong	apple-domain-verification TXT is Apple Business/Sign in with Apple, not iCloud Mail; MX is Google Workspace
+nubank.com.br	Atlassian Cloud		correct	dns-verification atlassian-domain-verification TXT
+nubank.com.br	Emotion		correct	style data-emotion tags in html
+nubank.com.br	Google Workspace		correct	MX aspmx.l.google.com
+nubank.com.br	Microsoft 365		correct	dns-verification TXT MS=ms84751479
+nubank.com.br	Postman		correct	dns-verification postman-domain-verification TXT
+nubank.com.br	Twilio		correct	dns-verification twilio-domain-verification TXT
+nubank.com.br	Linear		correct	dns-verification linear-domain-verification TXT
+nubank.com.br	MongoDB Atlas		correct	dns-verification mongodb-site-verification TXT
+nubank.com.br	Envoy		correct	x-envoy-upstream-service-time header, server: istio-envoy
+nubank.com.br	Amazon Web Services		correct	NS awsdns, CloudFront headers
+nubank.com.br	Docker		correct	dns-verification docker-verification TXT
+nubank.com.br	React		correct	implied by Next.js (confirmed)
+nubank.com.br	Stripe		correct	dns-verification stripe-verification TXT
+nubank.com.br	AWS Certificate Manager		correct	cert issuer Amazon RSA 2048 M04 in report.json
+nubank.com.br	Amazon CloudFront		correct	via ...cloudfront.net (CloudFront), x-amz-cf-id
+nubank.com.br	Amazon Route 53		correct	4 NS awsdns-* records
+nubank.com.br	Anthropic		correct	dns-verification anthropic-domain-verification TXT
+nubank.com.br	Cursor		correct	dns-verification cursor-domain-verification TXT
+nubank.com.br	GlobalSign		correct	dns-verification _globalsign-domain-verification TXT
+nubank.com.br	HSTS		correct	strict-transport-security header present
+nubank.com.br	HackerOne		correct	dns-verification h1-domain-verification TXT
+nubank.com.br	OpenAI		correct	dns-verification openai-domain-verification TXT
+nubank.com.br	Priority Hints		correct	img fetchPriority="high" in html
+nubank.com.br	Swiper		correct	div.swiper-wrapper in html
+nubank.com.br	Adobe		correct	dns-verification adobe-idp-site-verification TXT
+nubank.com.br	Meta		correct	dns-verification facebook-domain-verification TXT
+nubank.com.br	Miro		correct	dns-verification miro-verification TXT
+nubank.com.br	Open Graph		correct	og: meta tags present
+nubank.com.br	Slack		correct	dns-verification slack-domain-verification TXT
+nubank.com.br	Webpack		correct	implied by Next.js; _next/static/chunks/webpack-*.js loaded
+totvs.com	Cart Functionality		wrong	a[href*=/cart] matched only /carta-da-reforma-tributaria/ (a letter), no cart/order link
+totvs.com	WordPress		correct	wp-content plugin and theme assets, Yoast comment
+totvs.com	Google Workspace		correct	MX aspmx.l.google.com
+totvs.com	Microsoft 365		correct	dns-verification TXT MS=ms25948116
+totvs.com	Zendesk		correct	SPF include:mail.zendesk.com (spf-include)
+totvs.com	MySQL		correct	implied by WordPress; W3TC comment confirms a DB-backed WP; nothing contradicts
+totvs.com	PHP		correct	implied by WordPress; nothing contradicts
+totvs.com	W3 Total Cache		correct	"Performance optimized by W3 Total Cache" comment
+totvs.com	YouTube		correct	iframe src youtube.com/embed/... in html
+totvs.com	EWWW Image Optimizer		correct	wp-content/plugins/ewww-image-optimizer/ script
+totvs.com	Google Cloud		correct	NS ns-cloud-d*.googledomains.com (Cloud DNS) and via: 1.1 google
+totvs.com	Gravity Forms	3.1.2	correct	plugins/gravityforms scripts with ?ver=3.1.2
+totvs.com	Perfmatters		correct	wp-content/plugins/perfmatters/js/lazyload.min.js?ver=2.6.7
+totvs.com	Yoast SEO	28.5	correct	comment "Yoast SEO Premium plugin v26.9 (Yoast SEO v28.5)"
+totvs.com	Yoast SEO Premium	26.9	correct	comment "Yoast SEO Premium plugin v26.9"
+totvs.com	Cloudflare		correct	server: cloudflare, cf-ray, cf-cache-status
+totvs.com	Facebook Pixel		correct	connect.facebook.net/en_US/fbevents.js with fbq init
+totvs.com	Font Awesome		correct	class fa-brands fa-linkedin plus cdnjs font-awesome 6.7.2 css
+totvs.com	GlobalSign		correct	dns-verification _globalsign-domain-verification TXT
+totvs.com	Google Cloud CDN		uncertain	only via: 1.1 google (also sent by other Google front ends) behind Cloudflare; no Cloud CDN-specific header
+totvs.com	Google Cloud DNS		correct	NS ns-cloud-d1..d4.googledomains.com, SOA cloud-dns-hostmaster.google.com
+totvs.com	Google Tag Manager		correct	GTM comment with gtm.js?id=GTM-K27XC5M
+totvs.com	Priority Hints		correct	img/link fetchpriority="high" in html
+totvs.com	cdnjs		correct	cdnjs.cloudflare.com jquery 3.7.1 script
+totvs.com	jQuery	3.7.1	correct	cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js (version 3.7.1 correct)
+totvs.com	DocuSign		correct	dns-verification docusign= TXT
+totvs.com	HTTP/3		correct	alt-svc: h3=":443"
+totvs.com	Open Graph		correct	og: meta tags present
+farmrio.com.br	Cart Functionality		correct	minicart-drawer "open cart" label and /account#/orders link in html (the /cart hits cartao-postal/carteira are spurious, but the store has a cart)
+farmrio.com.br	Notion		correct	dns-verification notion-domain-verification TXT
+farmrio.com.br	VTEX		correct	preconnect lojafarm.vteximg.com.br and lojafarm.vtexassets.com, io.vtex.com.br in CSP (headless VTEX behind Deco)
+farmrio.com.br	Microsoft 365		correct	MX farmrio-com-br.mail.protection.outlook.com
+farmrio.com.br	PHP		wrong	".php?" matched only third-party VWO endpoint dev.visualwebsiteoptimizer.com/j.php; no PHP on the site
+farmrio.com.br	Amazon Web Services		correct	NS awsdns, hop 0 AmazonS3/CloudFront, s3.amazonaws.com script
+farmrio.com.br	Amazon Route 53		correct	4 NS awsdns-* records
+farmrio.com.br	Amazon S3		correct	hop 0 apex redirect has server: AmazonS3; BIMI logo on farmriosoma.s3.amazonaws.com; (matched script is a third-party seal on S3)
+farmrio.com.br	Cloudflare		correct	server: cloudflare, cf-ray on www response
+farmrio.com.br	Cloudflare Bot Management		correct	__cf_bm cookie in set-cookie
+farmrio.com.br	HSTS		correct	strict-transport-security header present
+farmrio.com.br	Let's Encrypt		correct	cert issuer Let's Encrypt (YE1) in report.json
+farmrio.com.br	OneTrust		correct	script cdn.cookielaw.org/scripttemplates/otSDKStub.js
+farmrio.com.br	Priority Hints		correct	img fetchPriority attributes in html
+farmrio.com.br	WhatsApp Business Chat		correct	link to api.whatsapp.com/send?phone=552137337701
+farmrio.com.br	jsDelivr		correct	script cdn.jsdelivr.net/npm/@azzas/azzas-tracker-web
+farmrio.com.br	Figma		correct	dns-verification figma-domain-verification TXT
+farmrio.com.br	Miro		correct	dns-verification miro-verification TXT
+farmrio.com.br	Open Graph		correct	og: meta tags present
+hisha.com.br	Cart Functionality		correct	Nuvemshop store: ajax-cart-minimum-value input and js-checkout-enabled-validation-messages class
+hisha.com.br	Nuvemshop		correct	footer link title="Nuvemshop", acdn-us.mitiendanube.com assets, robots.txt comment
+hisha.com.br	Google Workspace		correct	MX aspmx.l.google.com
+hisha.com.br	Cloudflare		correct	server: cloudflare, cf-ray, cf-cache-status
+hisha.com.br	Cloudflare Bot Management		correct	__cf_bm cookie in set-cookie
+hisha.com.br	Cloudflare Browser Insights		correct	script static.cloudflareinsights.com/beacon.min.js
+hisha.com.br	Facebook Pixel		correct	connect.facebook.net/en_US/fbevents.js with fbq init
+hisha.com.br	GoDaddy		correct	NS ns59/ns60.domaincontrol.com, SOA domaincontrol.com
+hisha.com.br	Google Analytics		correct	script googletagmanager.com/gtag/js?id=G-JRR0F3RX6F (GA4)
+hisha.com.br	Google Font API		correct	link to fonts.googleapis.com
+hisha.com.br	Google Hosted Libraries		correct	script ajax.googleapis.com/ajax/libs/jquery/1.11.1/
+hisha.com.br	Google Tag Manager		wrong	only gtag.js?id=G-... (GA4) is loaded; no GTM-* container, gtm.js or GTM comment in dump
+hisha.com.br	HSTS		correct	strict-transport-security header present
+hisha.com.br	Priority Hints		correct	link/img fetchpriority="high" in html
+hisha.com.br	Swiper		correct	div.swiper-wrapper in swiper-container slider
+hisha.com.br	jQuery	1.11.1	correct	ajax.googleapis.com/ajax/libs/jquery/1.11.1/jquery.min.js (version 1.11.1 correct)
+hisha.com.br	Meta		correct	dns-verification facebook-domain-verification TXT
+hisha.com.br	Open Graph		correct	og: meta tags present
+uzashoes.com.br	Cart Functionality		correct	real link href="/checkout/cart" and w3-cart-btn cart widget in html
+uzashoes.com.br	Tray		correct	data-tray-theme on html, images.tcdn.com.br assets, tcdn scripts
+uzashoes.com.br	Nginx		correct	server: nginx on www response
+uzashoes.com.br	Amazon Web Services		correct	implied by Amazon SES (SPF include:amazonses.com)
+uzashoes.com.br	Amazon SES		correct	SPF include:amazonses.com (spf-include)
+uzashoes.com.br	Cloudflare		wrong	implied only by cdnjs; headers show nginx/Azion edge (x-azion-*), no cf-* headers or Cloudflare NS/IP
+uzashoes.com.br	FancyBox		correct	script cdnjs.../fancybox/3.5.7/jquery.fancybox.min.js
+uzashoes.com.br	Google Analytics	GA4	correct	gtag/js?id=G-84GMWMQQRX and gtag config G-84GMWMQQRX (GA4)
+uzashoes.com.br	Google Font API		correct	link preconnect fonts.googleapis.com
+uzashoes.com.br	Google Tag Manager		correct	GTM-5FLDSM snippet, ns.html iframe and GTM comment
+uzashoes.com.br	HSTS		correct	strict-transport-security header present
+uzashoes.com.br	Let's Encrypt		correct	cert issuer Let's Encrypt (YR1) in report.json
+uzashoes.com.br	Nemu		correct	script trackings.nemu.com.br/trackings/.../script.js
+uzashoes.com.br	Sendgrid		correct	SPF include:sendgrid.net (spf-include)
+uzashoes.com.br	SmartHint		correct	script service.smarthint.co/Dynamic/Tray/SH-671496
+uzashoes.com.br	Swiper		correct	script swiper.min.js and div.swiper-wrapper
+uzashoes.com.br	WhatsApp Business Chat		correct	link to api.whatsapp.com/send?phone=551421044400
+uzashoes.com.br	cdnjs		correct	script cdnjs.cloudflare.com (jquery, fancybox)
+uzashoes.com.br	jQuery	3.7.1	correct	cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js (version 3.7.1 correct)
+uzashoes.com.br	jsDelivr		correct	script cdn.jsdelivr.net/npm/js-cookie@3.0.1
+uzashoes.com.br	Open Graph		correct	og: meta tags present
+agenciamestre.com	WordPress		correct	wp-includes/wp-content script and link URLs
+agenciamestre.com	Google Workspace		correct	MX aspmx.l.google.com
+agenciamestre.com	MySQL		correct	implied by WordPress; nothing contradicts
+agenciamestre.com	PHP		correct	implied by WordPress; x-pingback/xmlrpc.php WordPress
+agenciamestre.com	Bootstrap		correct	script maxcdn.bootstrapcdn.com/bootstrap/3.3.5/js/bootstrap.min.js
+agenciamestre.com	Svelte		correct	implied by AdOpt (widget is Svelte-based per signature); no contradiction, not directly observed
+agenciamestre.com	Yoast SEO	19.12	correct	comment "optimized with the Yoast SEO plugin v19.12"
+agenciamestre.com	AdOpt		correct	script tag.goadopt.io/injector.js
+agenciamestre.com	BootstrapCDN	3.3.5	correct	script maxcdn.bootstrapcdn.com/bootstrap/3.3.5/js/bootstrap.min.js
+agenciamestre.com	Cloudflare		correct	server: cloudflare, cf-ray, cf-cache-status
+agenciamestre.com	Cloudflare Browser Insights		correct	script static.cloudflareinsights.com/beacon.min.js
+agenciamestre.com	Cloudflare DNS		correct	NS lily/carl.ns.cloudflare.com
+agenciamestre.com	Fathom		correct	script cdn.usefathom.com/script.js
+agenciamestre.com	Font Awesome	4.6.2	correct	link maxcdn.bootstrapcdn.com/font-awesome/4.6.2/css/font-awesome.min.css
+agenciamestre.com	Google Font API		correct	link fonts.googleapis.com/css2
+agenciamestre.com	Google Hosted Libraries		correct	script ajax.googleapis.com/ajax/libs/jquery/1.11.3/jquery.min.js (live, not commented)
+agenciamestre.com	Google Tag Manager		correct	GTM-MFLVHC snippet and noscript iframe
+agenciamestre.com	MailChimp		correct	SPF include spf.mandrillapp.com (Mailchimp Transactional/Mandrill)
+agenciamestre.com	RD Station		correct	loader script d335luupugsy2.cloudfront.net/js/loader-scripts/...-loader.js; SPF include _spf.rdstation.com.br
+agenciamestre.com	Really Simple SSL & Security		correct	body data-rsssl=1
+agenciamestre.com	Sendgrid		correct	SPF include u1903880.wl.sendgrid.net
+agenciamestre.com	jQuery	1.11.3	correct	jQuery 1.11.3 script from googleapis (loaded after WP 3.6.0; both present); version 1.11.3 is a loaded one
+agenciamestre.com	jQuery Migrate	3.3.2	correct	wp-includes/js/jquery/jquery-migrate.min.js?ver=3.3.2
+agenciamestre.com	jsDelivr		correct	script cdn.jsdelivr.net/npm/vanilla-lazyload@17.3.1
+agenciamestre.com	HTTP/3		correct	alt-svc: h3=":443"
+agenciamestre.com	Open Graph		correct	og: meta tags
+www.mlabs.com.br	Elementor	4.3.4	correct	generator "Elementor 4.3.4" and elementor plugin assets
+www.mlabs.com.br	WordPress	7.1.3	correct	generator "WordPress 7.1.3" and wp-content/wp-includes
+www.mlabs.com.br	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+www.mlabs.com.br	Microsoft 365		correct	MX mlabs-com-br.mail.protection.outlook.com; MS=ms84910011 dns-verification
+www.mlabs.com.br	MySQL		correct	implied by WordPress; nothing contradicts
+www.mlabs.com.br	PHP	8.4.27	correct	x-powered-by: PHP/8.4.27
+www.mlabs.com.br	WP Rocket	3.23.5.1	correct	generator "WP Rocket 3.23.5.1", rocket comment and plugin paths
+www.mlabs.com.br	Amazon Web Services		correct	NS awsdns (Route 53)
+www.mlabs.com.br	RankMath SEO		correct	script class rank-math-schema-pro and rank-math styles
+www.mlabs.com.br	Amazon Route 53		correct	NS ns-173.awsdns-21.com etc
+www.mlabs.com.br	Bootstrap Icons		correct	stylesheet npm/bootstrap-icons/font/bootstrap-icons.css
+www.mlabs.com.br	Cloudflare		correct	server: cloudflare, cf-ray
+www.mlabs.com.br	Cloudflare Bot Management		correct	__cf_bm cookie set (signature rule); cookie is also set by lower-tier Cloudflare bot features
+www.mlabs.com.br	Font Awesome	6.7.2	correct	font-awesome 6.7.2 all.min.css and fa- classes
+www.mlabs.com.br	Google Tag Manager		correct	GTM-TVKQN9H noscript iframe
+www.mlabs.com.br	HSTS		correct	strict-transport-security header
+www.mlabs.com.br	Mailgun		correct	SPF include mailgun.org
+www.mlabs.com.br	Microsoft Advertising		uncertain	only a WP Rocket dns-prefetch hint for bat.bing.com; no UET script in the page
+www.mlabs.com.br	Priority Hints		correct	img fetchpriority="high"
+www.mlabs.com.br	Sendgrid		correct	SPF include sendgrid.net
+www.mlabs.com.br	Swiper		correct	elementor lib swiper/v8/swiper.min.js and swiper-wrapper
+www.mlabs.com.br	cdnjs		correct	preload link to cdnjs.cloudflare.com font-awesome webfont
+www.mlabs.com.br	imagesLoaded	5.0.0	correct	script wp-includes/js/imagesloaded.min.js?ver=5.0.0
+www.mlabs.com.br	jQuery		correct	wp-includes/js/jquery/jquery.min.js?ver=3.7.1
+www.mlabs.com.br	jQuery Migrate	3.4.1	correct	jquery-migrate.min.js?ver=3.4.1
+www.mlabs.com.br	reCAPTCHA		correct	inline code loads google.com/recaptcha/api.js and gstatic recaptcha
+www.mlabs.com.br	HTTP/3		correct	alt-svc h3
+www.mlabs.com.br	Meta		correct	dns-verification: facebook-domain-verification TXT
+www.mlabs.com.br	Open Graph		correct	og: meta tags
+www.mlabs.com.br	RSS		correct	link rel=alternate type=application/rss+xml
+g1.globo.com	Cart Functionality		wrong	a[href*="/cart"] matched /cartola links (Cartola FC), not a cart
+g1.globo.com	Microsoft 365		correct	dns-verification: MS=ms72811081
+g1.globo.com	Salesforce		correct	SPF include _spf.salesforce.com
+g1.globo.com	React		uncertain	only a lazy-load list entry for unpkg react@18.3.1 (loaded if window.React undefined); no direct script tag
+g1.globo.com	DigiCert		correct	certIssuer checked in the TLS chain of the report (RapidSSL is DigiCert; YR1/Root YR is Let's Encrypt's 2025 hierarchy)
+g1.globo.com	Google Tag Manager		correct	GTM-5PWZB8V noscript iframe and comment
+g1.globo.com	Lightbox		wrong	matched Globo own gui-lightbox / clappr login-screen plugin, not Lokesh Lightbox library
+g1.globo.com	jQuery	1.8.3	correct	script s3.glbimg.com/cdn/libs/jquery/1.8.3/jquery.min.js
+g1.globo.com	reCAPTCHA		uncertain	only a lazy-load list entry for google.com/recaptcha/api.js?render=explicit; not a script tag
+g1.globo.com	Meta		correct	dns-verification: facebook-domain-verification TXT
+g1.globo.com	Open Graph		correct	og: meta tags
+www.gov.br	Cart Functionality		wrong	a[href*="/cart"] matched /carteira-digital-de-transito app link
+www.gov.br	Plone		correct	meta generator "Plone - http://plone.org", x-cache-rule plone.* headers
+www.gov.br	PHP		wrong	matched facebook.com/sharer.php?u= share link, not a site script; site is Plone
+www.gov.br	Python		correct	implied by Plone
+www.gov.br	Varnish	6.0	correct	via: 1.1 varnish (Varnish/6.0), x-varnish
+www.gov.br	Aprimo		wrong	selector img[src*=aprimo] matched "governo-aprimora" (Portuguese word) in an image URL
+www.gov.br	Cloudflare		uncertain	implied only by cdnjs library host; site itself served via Varnish, no cf headers
+www.gov.br	Font Awesome	6.7.1	correct	link cdnjs font-awesome/6.7.1/css/all.min.css
+www.gov.br	Google Tag Manager		correct	GTM-NHZSKTD noscript iframe and comment
+www.gov.br	HSTS		correct	strict-transport-security header
+www.gov.br	Swiper		correct	script cdnjs Swiper/3.4.2/js/swiper.min.js and swiper-wrapper
+www.gov.br	cdnjs		correct	script and link to cdnjs.cloudflare.com
+www.gov.br	jQuery		correct	Plone portal_javascripts plone.app.jquery script
+www.gov.br	Open Graph		correct	og: meta tags
+vercel.com	Next.js		correct	x-powered-by: Next.js, Payload; /_next assets
+vercel.com	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+vercel.com	Google Workspace		correct	MX aspmx.l.google.com
+vercel.com	Microsoft 365		correct	dns-verification: MS=ms81951275
+vercel.com	Salesforce		correct	SPF include _spf.salesforce.com; SFMC TXT
+vercel.com	Amazon Web Services		correct	implied by Amazon SES (SPF include amazonses.com)
+vercel.com	React		correct	Next.js site; data-react-aria-pressable attributes in html
+vercel.com	Stripe		correct	dns-verification: stripe-verification TXT
+vercel.com	Vercel		correct	server: Vercel, x-vercel-id, x-vercel-cache
+vercel.com	Amazon S3		uncertain	only s3.amazonaws.com allowed in CSP header; no actual use seen
+vercel.com	Amazon SES		correct	SPF include amazonses.com
+vercel.com	Anthropic		correct	dns-verification: anthropic-domain-verification TXT
+vercel.com	Box		correct	dns-verification: box-domain-verification TXT
+vercel.com	Cursor		correct	dns-verification: cursor-domain-verification TXT
+vercel.com	HSTS		correct	strict-transport-security header
+vercel.com	HackerOne		correct	dns-verification: h1-domain-verification TXT
+vercel.com	Let's Encrypt		correct	certIssuer checked in the TLS chain of the report (RapidSSL is DigiCert; YR1/Root YR is Let's Encrypt's 2025 hierarchy)
+vercel.com	Linkedin Insight Tag		uncertain	only snap.licdn.com allowed in CSP script-src; no tag in html
+vercel.com	Loom		correct	dns-verification: loom-verification TXT
+vercel.com	Mixpanel		correct	dns-verification: mixpanel-domain-verify TXT
+vercel.com	OpenAI		correct	dns-verification: openai-domain-verification TXT
+vercel.com	Priority Hints		correct	link rel=preload fetchPriority="low"
+vercel.com	Sendgrid		correct	SPF include sendgrid.net
+vercel.com	DocuSign		correct	dns-verification: docusign= TXT
+vercel.com	Open Graph		correct	og: meta tags
+vercel.com	PWA		correct	link rel=manifest /manifest.webmanifest (weak signature: manifest only)
+vercel.com	Webpack		wrong	implied by Next.js, but assets are Turbopack chunks (turbopack-*.js), no webpack in page
+vercel.com	Zoom		correct	dns-verification: ZOOM_verify_ TXT
+github.com	Contentful		correct	twitter:image/og:image from images.ctfassets.net (Contentful asset CDN) and CSP ctfassets
+github.com	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+github.com	Atlassian Cloud		correct	dns-verification: atlassian-domain-verification TXT
+github.com	Microsoft 365		correct	MX github-com.mail.protection.outlook.com; MS= dns-verification
+github.com	Zendesk		correct	SPF include mail.zendesk.com
+github.com	Salesforce		correct	dns-verification: 00Dd0000000hHE0= org id TXT; SPF include _spf.salesforce.com
+github.com	Amazon Web Services		correct	NS awsdns-* (Route 53) plus S3 buckets in CSP
+github.com	GitHub Pages		wrong	server: github.com / x-github-request-id are GitHub itself, not Pages hosting
+github.com	React		correct	<react-partial> custom elements in html (GitHub React islands)
+github.com	Stripe		correct	dns-verification: stripe-verification TXT
+github.com	Amazon Route 53		correct	NS ns-520.awsdns-01.net etc
+github.com	Amazon S3		correct	CSP lists github-production-*.s3.amazonaws.com buckets
+github.com	Anthropic		correct	dns-verification: anthropic-domain-verification TXT
+github.com	Cursor		correct	dns-verification: cursor-domain-verification TXT
+github.com	HSTS		correct	strict-transport-security header
+github.com	Jamf		correct	dns-verification: jamf-site-verification TXT
+github.com	Loom		correct	dns-verification: loom-site-verification TXT
+github.com	OpenAI		correct	dns-verification: openai-domain-verification TXT
+github.com	Priority Hints		correct	modulepreload links with fetchpriority
+github.com	Sectigo		correct	certIssuer checked in the TLS chain of the report (RapidSSL is DigiCert; YR1/Root YR is Let's Encrypt's 2025 hierarchy)
+github.com	Sendgrid		correct	SPF include sendgrid.net
+github.com	Adobe		correct	dns-verification: adobe-idp-site-verification TXT
+github.com	DocuSign		correct	dns-verification: docusign= TXT
+github.com	Meta		correct	dns-verification: facebook-domain-verification TXT
+github.com	Miro		correct	dns-verification: miro-verification TXT
+github.com	Open Graph		correct	og: meta tags
+github.com	PWA		correct	link rel=manifest /manifest.json (weak signature: manifest only)
+washingtonpost.com	Microsoft 365		correct	dns-verification: MS=ms58521745; SPF spf.protection.outlook.com
+washingtonpost.com	Stitches		correct	<style id="stitches"> element
+washingtonpost.com	PHP		uncertain	only imrs.php image-resizer URLs inside page data; no PHP header or script
+washingtonpost.com	Amazon Web Services		correct	NS awsdns-*, S3 image bucket URLs
+washingtonpost.com	Akamai		correct	x-akamai-transformed header, akamai-true-ttl, ak_p server-timing
+washingtonpost.com	Akamai Bot Manager		correct	ak_bmsc and bm_mi cookies
+washingtonpost.com	Akamai mPulse		correct	inline loader s.go-mpulse.net/boomerang with BOOMR_API_key
+washingtonpost.com	Amazon Route 53		correct	NS ns-666.awsdns-19.net etc
+washingtonpost.com	Amazon SES		correct	SPF include amazonses.com
+washingtonpost.com	AppNexus		uncertain	only dns-prefetch hint for secure.adnxs.com
+washingtonpost.com	Boomerang		correct	implied by Akamai mPulse (boomerang loader present)
+washingtonpost.com	Criteo		uncertain	only dns-prefetch hints for criteo.com / criteo.net
+washingtonpost.com	DigiCert		correct	certIssuer checked in the TLS chain of the report (RapidSSL is DigiCert; YR1/Root YR is Let's Encrypt's 2025 hierarchy)
+washingtonpost.com	DoubleClick Floodlight		wrong	matched securepubads.g.doubleclick.net/tag/js/gpt.js (Google Publisher Tag), no fls.doubleclick.net
+washingtonpost.com	GlobalSign		correct	dns-verification: globalsign-domain-verification TXT
+washingtonpost.com	Google Publisher Tag		correct	script securepubads.g.doubleclick.net/tag/js/gpt.js
+washingtonpost.com	HSTS		correct	strict-transport-security header
+washingtonpost.com	Integral Ad Science		uncertain	only dns-prefetch hint for dt.adsafeprotected.com
+washingtonpost.com	Nativo		uncertain	only dns-prefetch hints for postrelease.com
+washingtonpost.com	OpenX		uncertain	only dns-prefetch hints for openx.net
+washingtonpost.com	PubMatic		uncertain	only dns-prefetch hint for lyr.pubmatic.com
+washingtonpost.com	Unpkg		uncertain	only dns-prefetch hint for unpkg.com; nothing loaded from it
+washingtonpost.com	Open Graph		correct	og: meta tags
+washingtonpost.com	Slack		correct	dns-verification: slack-domain-verification TXT
+allbirds.com	Shopify		correct	cdn.shopify.com scripts, shopify-digital-wallet meta, powered-by: Shopify header
+allbirds.com	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+allbirds.com	Microsoft 365		correct	MX allbirds-com.mail.protection.outlook.com plus MS= TXT
+allbirds.com	Apple Pay		correct	script#apple-pay-shop-capabilities in page (Shopify Apple Pay config)
+allbirds.com	PayPal		correct	meta in-context-paypal-metadata data-paypal-v4 plus ShopifyPaypalV4VisibilityTracking (Shopify PayPal checkout)
+allbirds.com	Cloudflare		correct	server: cloudflare, cf-ray, cf-cache-status headers
+allbirds.com	Cursor		correct	dns-verification: cursor-domain-verification TXT
+allbirds.com	Google Tag Manager		correct	<!-- Google Tag Manager --> snippet with GTM-TH8KRSBJ
+allbirds.com	HSTS		correct	strict-transport-security header
+allbirds.com	Let's Encrypt		correct	cert issuer YE2 / Let's Encrypt in report
+allbirds.com	Priority Hints		correct	img fetchpriority='low' (and 'auto') in html
+allbirds.com	Swiper		correct	div.swiper-wrapper with swiper-slide markup in html
+allbirds.com	DocuSign		correct	dns-verification: docusign= TXT
+allbirds.com	HTTP/3		correct	alt-svc: h3 header
+allbirds.com	Miro		correct	dns-verification: miro-verification TXT
+allbirds.com	Open Graph		correct	og:* meta tags in html
+porterandyork.com	Cart Functionality		correct	a href=/cart/ links in WooCommerce store
+porterandyork.com	Elementor	4.3.5	correct	meta generator Elementor 4.3.5 matches version; elementor plugin scripts
+porterandyork.com	WooCommerce		correct	woocommerce plugin scripts under /wp-content/plugins/woocommerce
+porterandyork.com	WordPress		correct	wp-content/wp-includes paths, wp-json Link header
+porterandyork.com	Google Workspace		correct	MX aspmx.l.google.com
+porterandyork.com	MySQL		correct	implied by WordPress; nothing contradicts
+porterandyork.com	PHP		correct	implied by WordPress; nothing contradicts
+porterandyork.com	Animate.css		correct	animate.min.css in easy-accordion-free plugin (bundled Animate.css file)
+porterandyork.com	Hello Elementor		correct	link id hello-elementor, theme path /themes/hello-elementor/
+porterandyork.com	WP Rocket		correct	wp-content/plugins/wp-rocket/ lazyload script and assets
+porterandyork.com	Draftpress HFCM		correct	<!-- HFCM by 99 Robots --> comment in html
+porterandyork.com	Dynamic Conditions		correct	script dynamicconditions/Public/js/dynamic-conditions-public.js
+porterandyork.com	Easy Accordion		correct	easy-accordion-free plugin css/js in html
+porterandyork.com	Elementor Header & Footer Builder		correct	header-footer-elementor plugin css in html
+porterandyork.com	Google Tag Manager for WordPress		correct	duracelltomi-google-tag-manager plugin script gtm4wp-*.js
+porterandyork.com	Instagram Feed for WordPress		correct	instagram-feed plugin css (sbi-styles) in html
+porterandyork.com	Smash Balloon Instagram Feed		correct	instagram-feed plugin css (Smash Balloon) in html
+porterandyork.com	WP Engine		correct	x-powered-by: WP Engine header
+porterandyork.com	Cloudflare		correct	server: cloudflare, cf-ray headers
+porterandyork.com	Cloudflare Bot Management		correct	__cf_bm cookie in set-cookie header
+porterandyork.com	Cloudflare DNS		correct	NS/SOA at *.ns.cloudflare.com
+porterandyork.com	Font Awesome		correct	elementor/assets/lib/font-awesome (v4-shims.min.js, all.min.css) loaded
+porterandyork.com	Google Tag Manager		correct	GTM noscript iframe with GTM-NRW7KM5
+porterandyork.com	Klaviyo		correct	static.klaviyo.com/onsite/js/.../klaviyo.js script
+porterandyork.com	Let's Encrypt		correct	cert issuer YE2 / Let's Encrypt in report
+porterandyork.com	Priority Hints		correct	img fetchpriority=high on logo
+porterandyork.com	Slick		correct	post-carousel-addons-for-elementor/assets/slick/slick.min.js script
+porterandyork.com	Swiper		correct	elementor/assets/lib/swiper/v8/swiper.min.js script
+porterandyork.com	jQuery		correct	wp-includes/js/jquery/jquery.min.js script
+porterandyork.com	jQuery Migrate		correct	wp-includes/js/jquery/jquery-migrate.min.js script
+porterandyork.com	reCAPTCHA		correct	script www.google.com/recaptcha/api.js
+porterandyork.com	HTTP/3		correct	alt-svc: h3 header
+porterandyork.com	Open Graph		correct	og:* meta tags in html
+porterandyork.com	RSS		correct	link rel=alternate type=application/rss+xml /feed/
+mey.com	Magento		correct	implied by Hyva Themes; Magento_Enterprise theme paths in /frontend/Mey/hyva/ URLs
+mey.com	Cisco		correct	dns-verification: cisco-ci-domain-verification TXT
+mey.com	Microsoft 365		correct	dns-verification: MS=ms73035535 TXT
+mey.com	MySQL		correct	implied by Magento; nothing contradicts
+mey.com	PHP		correct	implied by Magento; nothing contradicts
+mey.com	Hyva Themes		correct	x-built-with: Hyva Themes header; theme path /frontend/Mey/hyva/
+mey.com	Ubuntu		correct	server: nginx/1.24.0 (Ubuntu)
+mey.com	Nginx	1.24.0	correct	server: nginx/1.24.0 (Ubuntu); version matches
+mey.com	Tailwind CSS		correct	implied by Hyva Themes (Hyva = Tailwind + Alpine); no tailwind string in html itself
+mey.com	Alpine.js		correct	x-data/x-init attributes (recommendedProducts_*) in html
+mey.com	Amazon Web Services		correct	implied by Amazon SES (SPF include:amazonses.com)
+mey.com	Amazon S3		uncertain	only a CSP report-only allowlist entry for Userlike's third-party S3 buckets (userlike-cdn-*.s3-eu-west-1.amazonaws.com); no sign mey itself uses S3
+mey.com	Amazon SES		correct	SPF include:amazonses.com in mey.com TXT
+mey.com	HSTS		correct	strict-transport-security header
+mey.com	Priority Hints		correct	img fetchpriority=high in html
+mey.com	Sectigo		correct	cert issuer Sectigo in report
+mey.com	Usercentrics		correct	script web.cmp.usercentrics.eu/ui/loader.js id=usercentrics-cmp
+mey.com	Meta		correct	dns-verification: facebook-domain-verification TXT
+linear.app	Notion		correct	dns-verification: notion-domain-verification TXT
+linear.app	Sanity		correct	CSP names project-specific sanity hosts (ornj730p.api.sanity.io, cdn.sanity.io/images/ornj730p); CSP-only evidence
+linear.app	Sanity.io		correct	same CSP evidence as Sanity (duplicate signature name)
+linear.app	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+linear.app	Google Workspace		correct	MX aspmx.l.google.com
+linear.app	Microsoft 365		correct	dns-verification: MS=ms43041516 TXT
+linear.app	styled-components	6.1.24	correct	style data-styled-version="6.1.24" matches version
+linear.app	Algolia		correct	CSP connect-src names app-specific 9RXBCYQ6DV-dsn.algolia.net; CSP-only evidence
+linear.app	Linear		correct	dns-verification: linear-domain-verification TXT (org uses Linear)
+linear.app	MongoDB Atlas		correct	dns-verification: mongodb-site-verification TXT
+linear.app	Amazon Web Services		correct	implied by Amazon SES (SPF include:amazonses.com)
+linear.app	Google Cloud		correct	via: 1.1 google header shows a Google Cloud front end (implying signature Google Cloud CDN itself is uncertain)
+linear.app	React		correct	implied by styled-components; page is Next.js/React (_next/static, RSC vary headers)
+linear.app	Stripe		correct	dns-verification: stripe-verification TXT; js.stripe.com in CSP
+linear.app	Amazon SES		correct	SPF include:amazonses.com
+linear.app	Anthropic		correct	dns-verification: anthropic-domain-verification TXT
+linear.app	Cloudflare		correct	server: cloudflare, cf-ray headers
+linear.app	Cloudflare DNS		correct	NS/SOA at *.ns.cloudflare.com
+linear.app	Cursor		correct	dns-verification: cursor-domain-verification TXT
+linear.app	Google Cloud CDN		uncertain	via: 1.1 google only proves a Google front end (also on Cloud Run/LB without CDN); CDN use cannot be confirmed (response is cf-cache-status DYNAMIC behind Cloudflare)
+linear.app	HSTS		correct	strict-transport-security header
+linear.app	HubSpot		correct	SPF include:...spf10.hubspotemail.net (HubSpot email sending)
+linear.app	Linkedin Insight Tag		correct	CSP script-src snap.licdn.com plus *.ads.linkedin.com connect-src (Insight Tag hosts); CSP-only evidence
+linear.app	OpenAI		correct	dns-verification: openai-domain-verification TXT
+linear.app	Priority Hints		correct	link/modulepreload fetchPriority="low" in html
+linear.app	DocuSign		correct	dns-verification: docusign= TXT
+linear.app	HTTP/3		correct	alt-svc: h3 header
+linear.app	Open Graph		correct	og:* meta tag in html
+linear.app	PWA		correct	link rel=manifest pwa.webmanifest in html
+linear.app	Slack		correct	dns-verification: slack-domain-verification TXT
+linear.app	Zoom		correct	dns-verification: ZOOM_verify_ TXT
+webflow.com	Webflow		correct	meta generator Webflow, html data-wf-site attribute, website-files.com assets
+webflow.com	Apple iCloud Mail		wrong	apple-domain-verification= is Apple Business/Pay domain verification, not iCloud Mail; MX is not iCloud (signature pattern 'apple-domain' too loose)
+webflow.com	Atlassian Cloud		correct	dns-verification: atlassian-domain-verification TXT
+webflow.com	Google Workspace		correct	MX aspmx.l.google.com / googlemail.com
+webflow.com	Postman		correct	dns-verification: postman-domain-verification TXT
+webflow.com	Zendesk		correct	SPF include:mail.zendesk.com (Zendesk sending mail)
+webflow.com	Linear		correct	dns-verification: linear-domain-verification TXT
+webflow.com	MongoDB Atlas		correct	dns-verification: mongodb-site-verification TXT
+webflow.com	Salesforce		correct	SPF include:_spf.salesforce.com
+webflow.com	Three.js		correct	script cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js
+webflow.com	Amazon Web Services		correct	NS ns-*.awsdns-* (Route 53); webflow runs on AWS (x-wf-region us-east-1)
+webflow.com	Docker		correct	dns-verification: docker-verification TXT
+webflow.com	Stripe		correct	dns-verification: stripe-verification TXT
+webflow.com	AWS Certificate Manager		correct	cert issuer Amazon RSA 2048 M04 in report
+webflow.com	Amazon Route 53		correct	NS ns-*.awsdns-*
+webflow.com	Amazon S3		correct	CSP names Webflow's own buckets (webflow-assets, webflow-prod-assets .s3...amazonaws.com); CSP-only evidence
+webflow.com	Box		correct	dns-verification: box-domain-verification TXT
+webflow.com	Cloudflare		correct	cf-ray and cf-cache-status headers
+webflow.com	Drift		correct	dns-verification: drift-domain-verification TXT
+webflow.com	Dropbox		correct	dns-verification: dropbox-domain-verification TXT
+webflow.com	Google Font API		correct	script ajax.googleapis.com/ajax/libs/webfont/1.6.26/webfont.js and fonts.googleapis.com link
+webflow.com	Google Hosted Libraries		correct	script ajax.googleapis.com/ajax/libs/webfont/... (Google Hosted Libraries)
+webflow.com	Google Tag Manager		correct	noscript GTM iframe GTM-55XXQM3F
+webflow.com	HSTS		correct	strict-transport-security header
+webflow.com	HubSpot		correct	dns-verification: hubspot-developer-verification TXT
+webflow.com	Jamf		correct	dns-verification: jamf-site-verification TXT
+webflow.com	Loom		correct	dns-verification: loom-site-verification TXT
+webflow.com	Mailgun		correct	SPF include:mailgun.org
+webflow.com	Mailjet		correct	SPF include:spf.mailjet.com
+webflow.com	OneTrust		correct	dns-verification: onetrust-domain-verification TXT
+webflow.com	OpenAI		correct	dns-verification: openai-domain-verification TXT
+webflow.com	Priority Hints		uncertain	all 12 fetchpriority attributes in html are empty (fetchpriority=""), so no real priority hint is set
+webflow.com	Segment		correct	dns-verification: segment-site-verification TXT; api.segment.io in CSP
+webflow.com	Swiper		correct	div.swiper-wrapper (class 'slider_element swiper') slider markup in html
+webflow.com	cdnjs		correct	script cdnjs.cloudflare.com/ajax/libs/three.js/...
+webflow.com	jQuery	3.5.1	correct	script d3e54v103j8qbb.cloudfront.net/js/jquery-3.5.1.min...js matches version 3.5.1
+webflow.com	jsDelivr		correct	scripts cdn.jsdelivr.net/gh/webflow/brand_studio@... in html
+webflow.com	reCAPTCHA		correct	inline script creates script www.google.com/recaptcha/api.js
+webflow.com	DocuSign		correct	dns-verification: docusign= TXT
+webflow.com	HTTP/3		correct	alt-svc: h3 header
+webflow.com	Meta		correct	dns-verification: facebook-domain-verification TXT
+webflow.com	Miro		correct	dns-verification: miro-verification TXT
+webflow.com	Open Graph		correct	og:* meta tag in html
+incomplete-chain.badssl.com	Ubuntu		correct	server: nginx/1.10.3 (Ubuntu) on the real response (200 page)
+incomplete-chain.badssl.com	Nginx	1.10.3	correct	server: nginx/1.10.3 (Ubuntu); version matches
+incomplete-chain.badssl.com	Google Cloud DNS		correct	NS ns-cloud-c*.googledomains.com for badssl.com
+incomplete-chain.badssl.com	Let's Encrypt		correct	cert issuer YR1 / Let's Encrypt in tls report; about the certificate, not an error page
