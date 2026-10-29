@@ -130,7 +130,10 @@ fn embedded_index_loads_and_detects_common_stacks() {
         ..Default::default()
     };
     let found = names(&engine.detect(&inputs));
-    for expected in ["WordPress", "PHP", "MySQL", "Nginx", "jQuery", "Google Tag Manager"] {
+    for expected in ["WordPress", "PHP", "MySQL", "Nginx", "jQuery", "Google Analytics"] {
         assert!(found.contains(&expected.to_owned()), "{expected} not in {found:?}");
     }
+    // gtag.js with a G- id is Google Analytics 4; without the corrections the
+    // loose upstream pattern called it Google Tag Manager.
+    assert!(!found.contains(&"Google Tag Manager".to_owned()), "{found:?}");
 }

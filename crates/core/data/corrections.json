@@ -1,0 +1,178 @@
+{
+  "Apple iCloud Mail": {
+    "cats": [
+      30
+    ],
+    "description": "Apple iCloud Mail is a webmail service provided by Apple, Inc.",
+    "dns": {
+      "MX": [
+        "mail\\.icloud\\.com"
+      ],
+      "TXT": [
+        "^apple-domain=",
+        "redirect=icloud\\.com"
+      ]
+    },
+    "icon": "Apple.svg",
+    "website": "https://www.apple.com/icloud/"
+  },
+  "Cart Functionality": {
+    "cats": [
+      6
+    ],
+    "description": "Websites that have a shopping cart or checkout page, either using a known ecommerce platform or a custom solution.",
+    "dom": [
+      "a[href$='/cart']",
+      "a[href*='/cart/']",
+      "a[href*='/cart?']",
+      "a[href*='/cart#']",
+      "a[href*='/order']",
+      "a[href*='/basket']",
+      "a[href*='/trolley']",
+      "a[href*='/bag/']",
+      "a[href*='/shoppingbag']",
+      "a[href*='/checkout']",
+      "a[href*='/winkelwagen']",
+      "[aria-controls='cart']",
+      "[class*='shopping-bag']",
+      "[class*='shopping-cart']",
+      "[class*='checkout']",
+      "[class*='winkelwagen']"
+    ],
+    "icon": "Cart-generic.svg",
+    "js": {
+      "google_tag_params.ecomm_pagetype": ""
+    },
+    "scriptSrc": [
+      "googlecommerce\\.com/trustedstores/api/js"
+    ],
+    "url": [
+      "/(?:cart|order|basket|trolley|bag|shoppingbag|checkout)(?:[/?#]|$)"
+    ],
+    "website": "https://en.wikipedia.org/wiki/Shopping_cart_software"
+  },
+  "PHP": {
+    "cats": [
+      27
+    ],
+    "cookies": {
+      "PHPSESSID": ""
+    },
+    "cpe": "cpe:2.3:a:php:php:*:*:*:*:*:*:*:*",
+    "description": "PHP is a general-purpose scripting language used for web development.",
+    "dom": [
+      "form[action*='login_process.php'], form[action*='assets/mail.php']"
+    ],
+    "headers": {
+      "Server": "php/?([\\d.]+)?\\;version:\\1",
+      "X-Powered-By": "^php/?([\\d.]+)?\\;version:\\1"
+    },
+    "icon": "PHP.svg",
+    "url": [
+      "\\.php(?:$|\\?)"
+    ],
+    "website": "https://php.net"
+  },
+  "cdnjs": {
+    "cats": [
+      31
+    ],
+    "description": "cdnjs is a free distributed JS library delivery service.",
+    "dom": [
+      "link[href*='cdnjs.cloudflare.com/']"
+    ],
+    "icon": "cdnjs.svg",
+    "oss": true,
+    "scriptSrc": [
+      "cdnjs\\.cloudflare\\.com"
+    ],
+    "website": "https://cdnjs.com"
+  },
+  "Google Tag Manager": {
+    "cats": [
+      42
+    ],
+    "description": "Google Tag Manager is a tag management system (TMS) that allows you to quickly and easily update measurement codes and related code fragments collectively known as tags on your website or mobile app.",
+    "html": [
+      "googletagmanager\\.com/ns\\.html[^>]+></iframe>",
+      "<!-- (?:End )?Google Tag Manager -->"
+    ],
+    "icon": "Google Tag Manager.svg",
+    "js": {
+      "google_tag_data": "",
+      "google_tag_manager": "",
+      "googletag": ""
+    },
+    "saas": true,
+    "scriptSrc": [
+      "googletagmanager\\.com/gtm\\.js"
+    ],
+    "website": "https://www.google.com/tagmanager"
+  },
+  "DoubleClick Floodlight": {
+    "cats": [
+      36
+    ],
+    "icon": "DoubleClick.svg",
+    "scriptSrc": [
+      "fls\\.doubleclick\\.net"
+    ],
+    "scripts": [
+      "fls\\.doubleclick\\.net"
+    ],
+    "website": "https://support.google.com/ds/answer/6029713?hl=en"
+  },
+  "YUI Doc": {
+    "cats": [
+      4
+    ],
+    "description": "YUI Doc is a Node.js application used at build time to generate API documentation.",
+    "html": [
+      "<html[^>]* yuilibrary\\.com/rdf/[\\d.]+/yui\\.rdf"
+    ],
+    "icon": "Yahoo.svg",
+    "website": "https://developer.yahoo.com/yui/yuidoc"
+  },
+  "Lightbox": {
+    "cats": [
+      59
+    ],
+    "cpe": "cpe:2.3:a:lightbox_photo_gallery_project:lightbox_photo_gallery:*:*:*:*:*:*:*:*",
+    "description": "Lightbox is small javascript library used to overlay images on top of the current page.",
+    "dom": {
+      "link[href*='lightbox']": {
+        "attributes": {
+          "href": "/lightbox(?:\\.min)?\\.css"
+        }
+      }
+    },
+    "icon": "Lightbox.svg",
+    "js": {
+      "Lightbox.activeImage": "",
+      "lightbox.$lightbox": ""
+    },
+    "oss": true,
+    "scriptSrc": [
+      "(?:^|/)lightbox(?:-plus-jquery)?(?:\\.min)?\\.js(?:$|\\?)"
+    ],
+    "website": "https://lokeshdhakar.com/projects/lightbox2/"
+  },
+  "Aprimo": {
+    "cats": [
+      95
+    ],
+    "description": "Aprimo is a United States-based company that develops and sells marketing automation software and digital asset management technology.",
+    "dom": [
+      "source[data-srcset*='/media/aprimo'], img[data-src*='/media/Aprimo'], img[src*='.aprimo.com/']"
+    ],
+    "icon": "Aprimo.svg",
+    "js": {
+      "Aprimo": ""
+    },
+    "pricing": [
+      "poa"
+    ],
+    "saas": true,
+    "website": "https://www.aprimo.com"
+  }
+}

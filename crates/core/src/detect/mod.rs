@@ -88,6 +88,8 @@ struct LocalData {
 
 static LOCAL: OnceLock<LocalData> = OnceLock::new();
 
+const CORRECTIONS: &str = include_str!("../../data/corrections.json");
+
 /// Lets the engine use the signatures from `insite update` and the user's own.
 /// Call before the engine first loads. Tests never call it, so they only ever
 /// see the embedded index.
@@ -117,16 +119,16 @@ pub struct Origin {
 }
 
 /// The embedded index, replaced by the updated one when that is newer and of
-/// the same format, plus the user's own signatures. Problems are reported and
-/// skipped: they never stop an analysis.
+/// the same format, then our corrections, then the user's own signatures.
+/// Problems are reported and skipped: they never stop an analysis.
 fn load_index() -> (Index, Origin) {
     let mut index: Index = serde_json::from_slice(EMBEDDED).expect("embedded index is valid");
     let mut origin = Origin::default();
-    let Some(local) = LOCAL.get() else {
-        return (index, origin);
-    };
+    let local = LOCAL.get();
 
-    if let Some(path) = local.cache.as_ref().map(|d| d.join("signatures").join("index.json"))
+    if let Some(path) = local
+        .and_then(|l| l.cache.as_ref())
+        .map(|d| d.join("signatures").join("index.json"))
         && path.exists()
     {
         match std::fs::read(&path)
@@ -148,7 +150,10 @@ fn load_index() -> (Index, Origin) {
         }
     }
 
-    if let Some(dir) = local.config.as_ref().map(|d| d.join("fingerprints"))
+    // Whichever base was chosen, embedded or updated, the same fixes apply.
+    index.merge(corrections(&index));
+
+    if let Some(dir) = local.and_then(|l| l.config.as_ref()).map(|d| d.join("fingerprints"))
         && dir.is_dir()
     {
         match custom_index(&dir, &index) {
@@ -161,6 +166,23 @@ fn load_index() -> (Index, Origin) {
         }
     }
     (index, origin)
+}
+
+/// Our replacements for webappanalyzer signatures that misfire, measured on the
+/// hand-labeled sites (`bench/labels.tsv`); `data/corrections.md` says why each
+/// one changed. Same format as the user's own signatures, and they win the same
+/// way: by name.
+fn corrections(base: &Index) -> Index {
+    let categories = base.categories_json();
+    let sources = insite_sigc::Sources {
+        technologies: vec![CORRECTIONS],
+        categories: &categories,
+        source: "insite corrections".to_owned(),
+        source_date: String::new(),
+    };
+    insite_sigc::compile(&sources)
+        .map(|(index, _)| index)
+        .expect("embedded corrections compile")
 }
 
 /// Compiles every `*.json` in `dir`, in the webappanalyzer format, against the
