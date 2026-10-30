@@ -93,6 +93,9 @@ pub struct Tech {
 pub struct Implied {
     pub name: String,
     pub confidence: u8,
+    /// The version the implying technology vouches for (`Magento\;version:2`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]

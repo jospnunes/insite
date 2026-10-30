@@ -23,7 +23,7 @@ pub use inputs::Inputs;
 /// Matched text kept as evidence.
 const EVIDENCE_LIMIT: usize = 120;
 /// Fancy-regex patterns backtrack; cap the work and the input they see.
-const BACKTRACK_LIMIT: usize = 100_000;
+const BACKTRACK_LIMIT: usize = 1_000_000;
 const FANCY_INPUT_LIMIT: usize = 512 << 10;
 const VERSION_MAX_LEN: usize = 15;
 
@@ -497,7 +497,7 @@ impl Engine {
                             target,
                             Found {
                                 confidence,
-                                version: None,
+                                version: implied.version.clone(),
                                 evidence: Vec::new(),
                                 implied_by: Some(self.index.techs[tech as usize].name.clone()),
                             },
@@ -508,7 +508,9 @@ impl Engine {
             }
         }
 
-        // Excludes, then requires and requiresCategory, until stable.
+        // Excludes, then requires and requiresCategory, until stable. One of
+        // several required technologies or categories is enough: a plugin for
+        // two platforms lists both.
         let excluded: HashSet<u32> = found
             .keys()
             .flat_map(|&t| {
@@ -528,10 +530,13 @@ impl Engine {
             let before = found.len();
             found.retain(|&t, _| {
                 let tech = &self.index.techs[t as usize];
-                tech.requires
-                    .iter()
-                    .all(|r| self.by_name.get(r).is_some_and(|id| present.contains(id)))
-                    && tech.requires_category.iter().all(|c| categories.contains(c))
+                (tech.requires.is_empty()
+                    || tech
+                        .requires
+                        .iter()
+                        .any(|r| self.by_name.get(r).is_some_and(|id| present.contains(id))))
+                    && (tech.requires_category.is_empty()
+                        || tech.requires_category.iter().any(|c| categories.contains(c)))
             });
             if found.len() == before {
                 break;

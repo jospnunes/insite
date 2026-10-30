@@ -356,7 +356,7 @@ porterandyork.com	reCAPTCHA		correct	script www.google.com/recaptcha/api.js
 porterandyork.com	HTTP/3		correct	alt-svc: h3 header
 porterandyork.com	Open Graph		correct	og:* meta tags in html
 porterandyork.com	RSS		correct	link rel=alternate type=application/rss+xml /feed/
-mey.com	Magento		correct	implied by Hyva Themes; Magento_Enterprise theme paths in /frontend/Mey/hyva/ URLs
+mey.com	Magento	2	correct	implied by Hyva Themes, which exists only for Magento 2; Magento_Enterprise theme paths in /frontend/Mey/hyva/ URLs
 mey.com	Cisco		correct	dns-verification: cisco-ci-domain-verification TXT
 mey.com	Microsoft 365		correct	dns-verification: MS=ms73035535 TXT
 mey.com	MySQL		correct	implied by Magento; nothing contradicts

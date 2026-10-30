@@ -103,6 +103,41 @@ fn implied_only_technologies_say_so() {
 }
 
 #[test]
+fn one_of_several_required_technologies_is_enough() {
+    // A plugin for two platforms, as webappanalyzer writes ElasticSuite.
+    let engine = engine_for(
+        r#"{
+        "Magento": {"cats": [3], "cookies": {"mage-cache-storage": ""}},
+        "OroCommerce": {"cats": [3], "html": ["oro-commerce-marker"]},
+        "Plugin": {"cats": [3], "scriptSrc": ["/plugin-tracker/"], "requires": ["OroCommerce", "Magento"]}
+    }"#,
+    );
+    let inputs = Inputs {
+        cookies: vec![("mage-cache-storage".into(), "{}".into())],
+        script_src: vec!["https://x/static/plugin-tracker/a.js".into()],
+        ..Default::default()
+    };
+    assert_eq!(names(&engine.detect(&inputs)), ["Magento", "Plugin"]);
+}
+
+#[test]
+fn an_implied_technology_takes_the_version_its_implier_gives() {
+    let engine = engine_for(
+        r#"{
+        "Magento": {"cats": [3], "cookies": {"mage-cache-storage": ""}},
+        "Theme": {"cats": [1], "html": ["theme-marker"], "implies": ["Magento\\;version:2"]}
+    }"#,
+    );
+    let inputs = Inputs {
+        html: Some("theme-marker"),
+        ..Default::default()
+    };
+    let found = engine.detect(&inputs);
+    let magento = found.iter().find(|t| t.name == "Magento").unwrap();
+    assert_eq!(magento.version.as_deref(), Some("2"));
+}
+
+#[test]
 fn unicode_patterns_match() {
     let engine = engine_for(SIGNATURES);
     let inputs = Inputs {

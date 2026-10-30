@@ -102,8 +102,12 @@ pub fn compile(sources: &Sources) -> Result<(Index, Report), String> {
             implies: strings(def.get("implies"))
                 .into_iter()
                 .map(|s| {
-                    let (name, _, confidence) = split_pattern(&s);
-                    Implied { name, confidence }
+                    let (name, version, confidence) = split_pattern(&s);
+                    Implied {
+                        name,
+                        confidence,
+                        version,
+                    }
                 })
                 .collect(),
             requires: strings(def.get("requires")),
