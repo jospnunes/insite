@@ -150,7 +150,6 @@ fn unicode_patterns_match() {
 #[test]
 fn embedded_index_loads_and_detects_common_stacks() {
     let engine = engine();
-    assert!(engine.technology_count() > 7000);
     let html = r#"<html><head><meta name="generator" content="WordPress 6.6">
         <script src="https://exemplo.com.br/wp-includes/js/jquery/jquery.min.js?ver=3.7.1"></script>
         <script src="https://www.googletagmanager.com/gtag/js?id=G-ABC123"></script></head><body></body></html>"#;

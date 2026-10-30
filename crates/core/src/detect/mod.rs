@@ -302,10 +302,6 @@ impl Engine {
         text
     }
 
-    pub fn technology_count(&self) -> usize {
-        self.index.techs.len()
-    }
-
     pub fn detect(&self, inputs: &Inputs) -> Vec<Technology> {
         let mut hits = Hits::default();
         for (field, contents) in inputs.lists() {

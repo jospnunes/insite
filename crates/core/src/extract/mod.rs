@@ -144,13 +144,6 @@ impl PageFacts {
             .and_then(|m| m.content.as_deref())
     }
 
-    pub fn meta_property(&self, property: &str) -> Option<&str> {
-        self.metas
-            .iter()
-            .find(|m| m.property.as_deref().is_some_and(|p| p.eq_ignore_ascii_case(property)))
-            .and_then(|m| m.content.as_deref())
-    }
-
     pub fn links_with_rel<'a>(&'a self, rel: &'a str) -> impl Iterator<Item = &'a Link> + 'a {
         self.links.iter().filter(move |l| l.rel.iter().any(|r| r == rel))
     }

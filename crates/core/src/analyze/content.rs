@@ -16,7 +16,6 @@ pub struct Content {
     /// Absence-based findings ("no title", "no H1") are only safe on a complete,
     /// representative page.
     pub findings_allowed: bool,
-    pub sniffed: bool,
 }
 
 /// The extracted page, or why there is nothing to analyze.
@@ -65,6 +64,5 @@ pub fn content(snapshot: &Snapshot) -> Result<Content, String> {
         url,
         limitation,
         findings_allowed,
-        sniffed,
     })
 }

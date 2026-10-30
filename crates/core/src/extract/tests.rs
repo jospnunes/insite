@@ -32,7 +32,14 @@ fn head_facts() {
     assert_eq!(facts.lang.as_deref(), Some("pt-BR"));
     assert_eq!(normalize_space(&facts.titles[0]), "Loja Exemplo");
     assert_eq!(facts.meta("description"), Some("Tudo para sua casa"));
-    assert_eq!(facts.meta_property("og:title"), Some("Loja"));
+    assert_eq!(
+        facts
+            .metas
+            .iter()
+            .find(|m| m.property.as_deref() == Some("og:title"))
+            .and_then(|m| m.content.as_deref()),
+        Some("Loja")
+    );
     let canonical: Vec<_> = facts.links_with_rel("canonical").collect();
     assert_eq!(canonical[0].href.as_deref(), Some("https://exemplo.com.br/loja/"));
     assert_eq!(facts.links_with_rel("stylesheet").count(), 1);

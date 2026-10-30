@@ -51,10 +51,6 @@ impl Target {
             credentials_ignored,
         })
     }
-
-    pub fn is_ip_literal(&self) -> bool {
-        !matches!(self.url.host(), Some(Host::Domain(_)))
-    }
 }
 
 /// The host as people write it: `açaí.com.br`, not `xn--aa-...`.
@@ -93,7 +89,6 @@ mod tests {
     #[test]
     fn ip_literal_and_fragment() {
         let t = Target::parse("http://192.0.2.10/a#b").unwrap();
-        assert!(t.is_ip_literal());
         assert_eq!(t.url.as_str(), "http://192.0.2.10/a");
     }
 

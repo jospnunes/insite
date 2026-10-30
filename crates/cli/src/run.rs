@@ -48,7 +48,7 @@ pub struct BrowserPlan {
 /// A report ready to print: the fast one while the browser still works, or
 /// the complete one.
 enum Ready {
-    Fast(usize, Box<Report>),
+    Fast(Box<Report>),
     Full(usize, Box<Snapshot>, Box<Report>),
 }
 
@@ -150,7 +150,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
                     if let (Some(launch), Some(plan)) = (launch, browser.as_ref()) {
                         if let Some((_, mut report)) = analyzed(snapshot.clone(), selection).await {
                             report.modules.browser = Module::skipped("the browser is still loading the page");
-                            let _ = tx.send(Ready::Fast(index, Box::new(report))).await;
+                            let _ = tx.send(Ready::Fast(Box::new(report))).await;
                         }
                         // Where the fast collection ended, or the input when it did not.
                         let url = match (snapshot.chain.last(), &snapshot.page) {
@@ -190,7 +190,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
         drop(tx);
         while let Some(ready) = rx.recv().await {
             match ready {
-                Ready::Fast(index, report) => printer.print_fast(index, &report),
+                Ready::Fast(report) => printer.print_fast(&report),
                 Ready::Full(index, snapshot, report) => {
                     if let Some(writer) = save.as_mut()
                         && let Err(e) = writer.write(&snapshot)
@@ -328,7 +328,7 @@ impl Printer {
 
     /// The report before the browser finished: shown on an interactive terminal
     /// with one site, and as a `phase: fast` line in NDJSON.
-    pub fn print_fast(&mut self, _index: usize, report: &Report) {
+    pub fn print_fast(&mut self, report: &Report) {
         match self.format {
             Format::Terminal { color, verbose, width } if self.progressive => {
                 write_out(&render::terminal(report, color, verbose, width));
