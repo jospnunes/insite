@@ -11,6 +11,7 @@ pub mod cdp;
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -467,9 +468,14 @@ fn keep_last_lines(pipe: impl std::io::Read, lines: &Mutex<VecDeque<String>>) {
 /// A fresh directory per run. Chromium from snap cannot read /tmp, so its
 /// profile goes under ~/snap/chromium/common.
 fn temporary_profile(executable: &Path) -> PathBuf {
+    // The count keeps apart browsers this process starts at once: the clock
+    // on macOS has only microseconds, and two browsers sharing a profile both
+    // fail on its lock.
+    static STARTED: AtomicU32 = AtomicU32::new(0);
     let unique = format!(
-        "insite-{}-{}",
+        "insite-{}-{}-{}",
         std::process::id(),
+        STARTED.fetch_add(1, Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.subsec_nanos())
@@ -671,4 +677,17 @@ fn collector_expression(js_paths: &[String], dom_properties: &[(String, String)]
   }};
 }})()"#
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn browsers_started_at_once_get_their_own_profiles() {
+        let names: std::collections::HashSet<_> = (0..1000)
+            .map(|_| temporary_profile(Path::new("/usr/bin/chromium")))
+            .collect();
+        assert_eq!(names.len(), 1000);
+    }
 }
