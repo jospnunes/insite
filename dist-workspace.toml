@@ -17,9 +17,6 @@ install-path = "CARGO_HOME"
 hosting = "github"
 # Whether to install an updater program
 install-updater = false
-# Build every artifact on pull requests too, without publishing (temporary,
-# to check the first release builds)
-pr-run-mode = "upload"
 
 # The glibc builds come from Ubuntu 22.04: on an older glibc the shell
 # installer takes the static musl build instead.
