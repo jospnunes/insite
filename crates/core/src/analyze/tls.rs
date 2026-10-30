@@ -216,8 +216,7 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
     }
 
     if let Verification::Invalid { problem, message } = &tls.verification
-        && leaf.is_some()
-        && let Some(f) = trust_finding(*problem, message, &parsed)
+        && let Some(f) = trust_finding(*problem, message, if leaf.is_some() { &parsed } else { &[] })
     {
         findings.push(f);
     }
@@ -260,7 +259,18 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
 /// Why the chain did not validate, told apart precisely: a missing intermediate
 /// (works in browsers that fetch it), a self-signed certificate, or an issuer
 /// that browsers do not trust. Dates and names are reported separately.
+///
+/// `chain` starts with the leaf; it is empty when the leaf could not be read. The
+/// failure is still reported then, with the verifier's own message, because the
+/// date and name findings need the leaf and cannot stand in for it.
 fn trust_finding(problem: CertProblem, message: &str, chain: &[&X509Certificate]) -> Option<Finding> {
+    if chain.is_empty() {
+        return Some(finding(
+            "tls.cert.untrusted",
+            &[("reason", message.to_owned())],
+            message.to_owned(),
+        ));
+    }
     match problem {
         CertProblem::Expired | CertProblem::NotYetValid | CertProblem::NameMismatch => return None,
         CertProblem::UnknownIssuer => {}
@@ -772,6 +782,28 @@ mod tests {
         assert!(f.is_empty(), "{:?}", ids(&f));
         // The certificate after the leaf is still the chain, not the leaf.
         assert_eq!(data.chain.len(), 1);
+    }
+
+    #[test]
+    fn failed_verification_is_reported_even_when_the_leaf_does_not_parse() {
+        let garbage = vec![0x30, 0x03, 0x01, 0x02, 0x03];
+        let other = leaf(&["other.example"], (2026, 9, 1), (2026, 12, 1), vec![1; 20]);
+        for verification in [
+            unknown_issuer(),
+            Verification::Invalid {
+                problem: CertProblem::Expired,
+                message: "invalid peer certificate: Expired".into(),
+            },
+        ] {
+            let (data, f) = examine(
+                &tls_info(vec![garbage.clone(), other.clone()], verification),
+                &host("example.com"),
+                NOW,
+            );
+            assert!(data.certificate.is_none());
+            assert_eq!(ids(&f), ["tls.cert.untrusted"]);
+            assert!(f[0].params["reason"].starts_with("invalid peer certificate"));
+        }
     }
 
     #[test]
