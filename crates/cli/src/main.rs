@@ -58,7 +58,7 @@ struct Args {
     /// read from standard input, one per line.
     urls: Vec<String>,
 
-    /// Modules to run, comma-separated: network,tls,dns,infra,security,stack,seo,weight
+    /// Modules to run, comma-separated: network,tls,dns,infra,security,stack,seo,weight,browser
     #[arg(short, long, value_name = "LIST")]
     modules: Option<String>,
 
