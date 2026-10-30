@@ -22,11 +22,14 @@ import time
 
 def read_sites(path):
     sites = []
-    for line in pathlib.Path(path).read_text().splitlines():
+    for number, line in enumerate(pathlib.Path(path).read_text().splitlines(), 1):
         if not line.strip() or line.startswith("#"):
             continue
-        segment, url, *_ = line.split("\t")
-        sites.append((segment, url))
+        fields = line.split("\t")
+        if len(fields) < 2 or not fields[1].strip():
+            print(f"{path}:{number}: skipped, expected 'segment<TAB>url': {line!r}", file=sys.stderr)
+            continue
+        sites.append((fields[0], fields[1].strip()))
     return sites
 
 
