@@ -16,7 +16,7 @@ use insite_core::collect::tls::Tls;
 use insite_core::collect::{Collector, Options};
 use insite_core::report::{Module, ModuleName, Outcome, Report, Selection};
 use insite_core::snapshot::{BrowserData, Snapshot};
-use tokio::sync::{Semaphore, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
 use crate::snapshots::Writer;
 use crate::{Format, markdown, render};
@@ -105,6 +105,9 @@ pub fn run(mut plan: Plan) -> ExitCode {
                 eprintln!("\ninsite: interrupted; printing what arrived (Ctrl-C again to quit)");
                 let _ = stop_tx.send(true);
                 if tokio::signal::ctrl_c().await.is_ok() {
+                    // No destructors run on this exit: stop the browsers and delete
+                    // their profiles first.
+                    insite_core::collect::browser::cleanup_all();
                     std::process::exit(130);
                 }
             }
@@ -130,14 +133,16 @@ pub fn run(mut plan: Plan) -> ExitCode {
                     if *stop.borrow() {
                         return;
                     }
-                    let t0 = tokio::time::Instant::now();
-                    // The browser process starts at t = 0, while the fast collection runs.
+                    // The browser process starts at t = 0, while the fast collection runs,
+                    // when a browser slot is free. Its deadline counts from the slot, not
+                    // from t = 0: a site queued behind other visits still gets its time.
                     let launch = browser.as_ref().map(|b| {
-                        let deadline = Deadline::new(t0 + b.timeout, Some(stop.clone()));
-                        let (proxy, browsers) = (b.proxy.clone(), browsers.clone());
+                        let (proxy, browsers, stop, timeout) =
+                            (b.proxy.clone(), browsers.clone(), stop.clone(), b.timeout);
                         tokio::spawn(async move {
-                            let slot = browsers.acquire_owned().await.expect("the semaphore is never closed");
-                            (Browser::launch(proxy.as_deref(), &deadline).await, slot)
+                            let (slot, deadline) = acquire_browser_slot(browsers, timeout, stop).await;
+                            let launched = Browser::launch(proxy.as_deref(), &deadline).await;
+                            (launched, slot, deadline)
                         })
                     });
                     let mut snapshot = collector.collect(&target, &opts).await;
@@ -147,20 +152,19 @@ pub fn run(mut plan: Plan) -> ExitCode {
                             report.modules.browser = Module::skipped("the browser is still loading the page");
                             let _ = tx.send(Ready::Fast(index, Box::new(report))).await;
                         }
-                        let deadline = Deadline::new(t0 + plan.timeout, Some(stop.clone()));
                         // Where the fast collection ended, or the input when it did not.
                         let url = match (snapshot.chain.last(), &snapshot.page) {
                             (Some(hop), Some(_)) => hop.url.clone(),
                             _ => target.url.to_string(),
                         };
                         snapshot.browser = Some(match launch.await {
-                            Ok((Ok(mut b), slot)) => {
+                            Ok((Ok(mut b), slot, deadline)) => {
                                 let data = b.visit(&url, &plan.visit, &deadline).await;
                                 b.close().await;
                                 drop(slot);
                                 data
                             }
-                            Ok((Err(e), _)) => BrowserData {
+                            Ok((Err(e), _, _)) => BrowserData {
                                 error: Some(e),
                                 ..BrowserData::default()
                             },
@@ -200,6 +204,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
         }
         Ok::<_, String>(())
     });
+    shut_down(runtime);
     if let Some(writer) = save
         && let Err(e) = writer.finish()
     {
@@ -214,6 +219,27 @@ pub fn run(mut plan: Plan) -> ExitCode {
     }
     let code = printer.finish();
     if *stop.borrow() { ExitCode::from(130) } else { code }
+}
+
+/// Waits for one of the browser slots. The returned deadline, `timeout` long,
+/// starts when the slot is held.
+async fn acquire_browser_slot(
+    slots: Arc<Semaphore>,
+    timeout: Duration,
+    stop: tokio::sync::watch::Receiver<bool>,
+) -> (OwnedSemaphorePermit, Deadline) {
+    let slot = slots.acquire_owned().await.expect("the semaphore is never closed");
+    let deadline = Deadline::new(tokio::time::Instant::now() + timeout, Some(stop));
+    (slot, deadline)
+}
+
+/// Ends the runtime without waiting for blocking threads. A name lookup the
+/// system resolver has not answered (`getaddrinfo` runs on one) cannot be
+/// cancelled, and waiting for it would leave the CLI hanging after its report.
+/// Browsers still alive are stopped first.
+fn shut_down(runtime: tokio::runtime::Runtime) {
+    insite_core::collect::browser::cleanup_all();
+    runtime.shutdown_background();
 }
 
 /// The analysis is CPU work: it runs off the IO threads.
@@ -409,6 +435,42 @@ mod tests {
             .map(|g| g.into_iter().map(|(i, _)| i).collect())
             .collect();
         assert_eq!(groups, [vec![0, 3], vec![1, 4], vec![2]]);
+    }
+
+    #[test]
+    fn shutting_down_does_not_wait_for_a_stuck_lookup() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .build()
+            .unwrap();
+        // What `lookup_host` does: a blocking call that outlives its future.
+        runtime.block_on(async {
+            let lookup = tokio::task::spawn_blocking(|| std::thread::sleep(Duration::from_secs(5)));
+            let _ = tokio::time::timeout(Duration::from_millis(50), lookup).await;
+        });
+        let started = Instant::now();
+        shut_down(runtime);
+        assert!(started.elapsed() < Duration::from_secs(2), "{:?}", started.elapsed());
+    }
+
+    #[tokio::test]
+    async fn the_browser_deadline_starts_when_the_slot_is_held() {
+        let slots = Arc::new(Semaphore::new(1));
+        let (_, stop) = tokio::sync::watch::channel(false);
+        let timeout = Duration::from_millis(400);
+        let started = tokio::time::Instant::now();
+        let (first, _) = acquire_browser_slot(slots.clone(), timeout, stop.clone()).await;
+        let queued = tokio::spawn(acquire_browser_slot(slots, timeout, stop));
+        // The first visit uses most of the time a site is allowed once it has a slot.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let freed = tokio::time::Instant::now();
+        drop(first);
+        let (_slot, deadline) = queued.await.unwrap();
+        assert!(deadline.instant() >= freed + timeout, "counted from before the slot");
+        assert!(deadline.instant() < freed + timeout + Duration::from_millis(200));
+        assert!(deadline.instant() > started + timeout);
+        assert!(!deadline.passed());
     }
 
     #[test]
