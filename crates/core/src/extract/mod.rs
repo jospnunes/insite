@@ -31,7 +31,8 @@ pub struct PageFacts {
     pub charset: String,
     pub charset_source: &'static str,
     pub lang: Option<String>,
-    /// Every `<title>` in the document; normally one.
+    /// Every `<title>` of the document, in tree order; normally one. Titles of
+    /// inline `<svg>` or `<math>` graphics are not included.
     pub titles: Vec<String>,
     pub metas: Vec<Meta>,
     pub links: Vec<Link>,
@@ -206,6 +207,9 @@ struct State {
     facts: PageFacts,
     elements: Vec<Element>,
     stack: Vec<usize>,
+    /// Per element: inside (or is) an `<svg>` or `<math>`, whose `<title>` names
+    /// the graphic and not the document.
+    foreign: Vec<bool>,
     in_body: bool,
     /// Index into `facts.scripts` of the script being read, with its JSON-LD slot.
     open_script: Option<(usize, Option<usize>)>,
@@ -222,6 +226,7 @@ impl State {
             facts: PageFacts::default(),
             elements: Vec::new(),
             stack: Vec::new(),
+            foreign: Vec::new(),
             in_body: false,
             open_script: None,
             open_title: None,
@@ -249,6 +254,7 @@ impl State {
             self.in_body = true;
         }
         let in_head = !self.in_body;
+        let foreign = matches!(tag, "svg" | "math") || self.stack.last().is_some_and(|&top| self.foreign[top]);
         let attr = |name: &str| attrs.iter().find(|(n, _)| n == name).map(|(_, v)| v.clone());
         let has = |name: &str| attrs.iter().any(|(n, _)| n == name);
 
@@ -307,7 +313,7 @@ impl State {
                 self.facts.inline_styles += 1;
                 self.in_style = true;
             }
-            "title" => {
+            "title" if !foreign => {
                 self.facts.titles.push(String::new());
                 self.open_title = Some(self.facts.titles.len() - 1);
             }
@@ -337,6 +343,7 @@ impl State {
         }
 
         let parent = self.stack.last().copied();
+        self.foreign.push(foreign);
         self.elements.push(Element {
             tag: tag.to_owned(),
             attrs,

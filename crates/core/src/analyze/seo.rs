@@ -440,6 +440,34 @@ fn sitemap_report(file: &AuxFile) -> Sitemap {
 mod tests {
     use super::*;
 
+    fn run(body: &str) -> Module<Seo> {
+        let snapshot = crate::analyze::infra::tests::snapshot_with(200, &[("content-type", "text/html")], body);
+        let content = crate::analyze::content::content(&snapshot);
+        analyze(&snapshot, &content)
+    }
+
+    #[test]
+    fn svg_title_is_not_the_page_title() {
+        let module = run("<!doctype html><html><head><meta charset=utf-8></head><body>\
+             <svg viewBox='0 0 1 1'><title>Logo da empresa</title><path d='M0 0'/></svg><h1>x</h1></body></html>");
+        let ids: Vec<&str> = module.findings.iter().map(|f| f.id).collect();
+        assert!(ids.contains(&"seo.title.missing"), "{ids:?}");
+        assert_eq!(module.data.unwrap().title, None);
+    }
+
+    #[test]
+    fn head_title_wins_over_svg_title_in_the_body() {
+        let module = run(
+            "<!doctype html><html><head><title>Loja de Roupas Exemplo - Camisetas e Calcas</title></head><body>\
+             <svg><title>Logo</title></svg></body></html>",
+        );
+        let data = module.data.unwrap();
+        assert_eq!(
+            data.title.as_deref(),
+            Some("Loja de Roupas Exemplo - Camisetas e Calcas")
+        );
+    }
+
     #[test]
     fn robots_blocking_rules() {
         assert!(blocks_everything("User-agent: *\nDisallow: /\n"));

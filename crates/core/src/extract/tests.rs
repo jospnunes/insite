@@ -181,3 +181,17 @@ fn script_past_the_depth_cap_is_still_read() {
     assert_eq!(facts.json_ld, [r#"{"a":1}"#]);
     assert_eq!(facts.scripts.len(), 1);
 }
+
+#[test]
+fn svg_titles_are_not_document_titles() {
+    let facts = page(
+        "<head><title>Real</title></head><body><svg><g><title>Logo</title></g></svg>\
+         <math><title>m</title></math><p>x</p></body>",
+    );
+    assert_eq!(facts.titles, ["Real"]);
+    // The svg element itself is still indexed.
+    assert!(facts.elements.iter().any(|e| e.tag == "svg"));
+    // After the svg closes, a title in HTML counts again.
+    let facts = page("<body><svg><title>a</title></svg><title>Late</title>");
+    assert_eq!(facts.titles, ["Late"]);
+}
