@@ -66,7 +66,7 @@ fn terminal_text(report: &Report, color: bool, verbose: bool, width: usize) -> S
     if !findings.is_empty() {
         out.push('\n');
         for f in findings.iter().filter(|f| verbose || f.severity > Severity::Info) {
-            let label = format!("{:<8}", severity(f.severity));
+            let label = severity_column(f.severity);
             let label = match f.severity {
                 Severity::High | Severity::Critical => s.red(&label),
                 Severity::Medium => s.yellow(&label),
@@ -305,7 +305,7 @@ fn browser_update_text(report: &Report, color: bool, verbose: bool, width: usize
             let _ = writeln!(
                 out,
                 "  {}{}  {}",
-                s.dim(&format!("{:<8}", severity(f.severity))),
+                s.dim(&severity_column(f.severity)),
                 f.title,
                 s.dim(f.id)
             );
@@ -954,6 +954,15 @@ fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
 
+/// Width of the longest severity label (`critical`) plus one separating space.
+pub const SEVERITY_COLUMN: usize = 9;
+
+/// The severity padded to a column one wider than the longest label, so the
+/// text that follows never runs into it.
+pub fn severity_column(s: Severity) -> String {
+    format!("{:<w$}", severity(s), w = SEVERITY_COLUMN)
+}
+
 pub fn severity(s: Severity) -> &'static str {
     match s {
         Severity::Info => "info",
@@ -1037,6 +1046,34 @@ pub(crate) mod tests {
         let plain = terminal(&report, false, true, 80);
         assert!(!plain.contains('\x1b'), "{plain:?}");
         assert!(plain.contains("example.com\u{fffd}[2J"), "{plain:?}");
+    }
+
+    #[test]
+    fn severity_column_always_leaves_a_separator() {
+        let all = [
+            Severity::Info,
+            Severity::Low,
+            Severity::Medium,
+            Severity::High,
+            Severity::Critical,
+        ];
+        let longest = all.iter().map(|s| severity(*s).len()).max().unwrap();
+        assert_eq!(SEVERITY_COLUMN, longest + 1);
+        for sev in all {
+            let col = severity_column(sev);
+            assert_eq!(col.len(), SEVERITY_COLUMN);
+            assert!(col.ends_with(' '), "{col:?}");
+        }
+    }
+
+    #[test]
+    fn critical_finding_is_separated_from_its_title() {
+        let mut report = hostile_report();
+        report.modules.seo.findings[0].severity = Severity::Critical;
+        report.modules.seo.findings[0].title = "Certificate expired".to_owned();
+        let text = terminal(&report, false, false, 80);
+        assert!(text.contains("critical Certificate expired"), "{text}");
+        assert!(!text.contains("criticalCertificate"), "{text}");
     }
 
     #[test]

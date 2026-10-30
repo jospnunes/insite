@@ -60,7 +60,7 @@ fn text(query: &str, color: bool) -> Option<String> {
     let width = matches.iter().map(|i| i.len()).max().unwrap_or(0);
     for id in matches {
         if let Some(e) = entry(id) {
-            let severity = format!("{:<8}", crate::render::severity(e.severity));
+            let severity = crate::render::severity_column(e.severity);
             let _ = writeln!(out, "{id:<width$}  {}{}", s.dim(&severity), placeholders(e.title));
         }
     }
@@ -106,6 +106,21 @@ mod tests {
         let all = text("", false).expect("the whole catalog");
         assert_eq!(all.lines().count(), CATALOG.len());
         assert_eq!(text("no.such.finding", false), None);
+    }
+
+    #[test]
+    fn listing_separates_severity_from_title() {
+        let all = text("", false).expect("the whole catalog");
+        for (id, _) in CATALOG {
+            let sev = crate::render::severity(entry(id).expect("catalog entry").severity);
+            let line = all
+                .lines()
+                .find(|l| l.starts_with(&format!("{id} ")))
+                .expect("a line per id");
+            let rest = line[id.len()..].trim_start();
+            assert!(rest.starts_with(sev), "{line}");
+            assert!(rest[sev.len()..].starts_with(' '), "{line}");
+        }
     }
 
     #[test]
