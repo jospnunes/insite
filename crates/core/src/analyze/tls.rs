@@ -200,8 +200,13 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
         }
     });
 
-    // SHA-1 anywhere below the root breaks the chain in every current browser.
-    if let Some(weak) = parsed.iter().find(|c| signature_name(c).starts_with("SHA-1")) {
+    // SHA-1 anywhere below the root breaks the chain in every current browser. A
+    // self-signed certificate (a root the server sent along) is skipped: its own
+    // signature is never checked.
+    if let Some(weak) = parsed
+        .iter()
+        .find(|c| signature_name(c).starts_with("SHA-1") && c.subject().as_raw() != c.issuer().as_raw())
+    {
         findings.push(finding(
             "tls.cert.sha1",
             &[("subject", subject_of(weak))],
@@ -678,6 +683,56 @@ mod tests {
         );
     }
 
+    /// Reads one DER element: tag, content, rest.
+    fn der_split(der: &[u8]) -> (u8, &[u8], &[u8]) {
+        let (len, header) = match der[1] {
+            n if n < 0x80 => (n as usize, 2),
+            0x81 => (der[2] as usize, 3),
+            0x82 => (((der[2] as usize) << 8) | der[3] as usize, 4),
+            _ => panic!("unsupported length"),
+        };
+        (der[0], &der[header..header + len], &der[header + len..])
+    }
+
+    fn der_join(tag: u8, content: &[u8]) -> Vec<u8> {
+        let mut out = vec![tag];
+        match content.len() {
+            n if n < 0x80 => out.push(n as u8),
+            n if n < 0x100 => out.extend([0x81, n as u8]),
+            n => out.extend([0x82, (n >> 8) as u8, n as u8]),
+        }
+        out.extend_from_slice(content);
+        out
+    }
+
+    /// The same certificate with its signature algorithm relabelled SHA-1 with
+    /// RSA (the signature itself is not checked by the analysis).
+    fn relabel_sha1(der: &[u8]) -> Vec<u8> {
+        let ecdsa_sha256 = [0x30, 0x0a, 0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x04, 0x03, 0x02];
+        let rsa_sha1 = [
+            0x30, 0x0b, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x05,
+        ];
+        let (_, cert, _) = der_split(der);
+        let (_, tbs, rest) = der_split(cert);
+        let (_, _, signature) = der_split(rest);
+        let at = tbs.windows(ecdsa_sha256.len()).position(|w| w == ecdsa_sha256).unwrap();
+        let mut new_tbs = tbs[..at].to_vec();
+        new_tbs.extend_from_slice(&rsa_sha1);
+        new_tbs.extend_from_slice(&tbs[at + ecdsa_sha256.len()..]);
+        let mut body = der_join(0x30, &new_tbs);
+        body.extend_from_slice(&rsa_sha1);
+        body.extend_from_slice(signature);
+        der_join(0x30, &body)
+    }
+
+    fn sha1_self_signed_root() -> Vec<u8> {
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
+        params.distinguished_name.push(rcgen::DnType::CommonName, "Old Root");
+        let root = params.self_signed(&KeyPair::generate().unwrap()).unwrap();
+        relabel_sha1(root.der())
+    }
+
     #[test]
     fn unparsable_leaf_is_not_replaced_by_the_next_certificate() {
         // The intermediate expired and is for another name: neither must be
@@ -692,6 +747,23 @@ mod tests {
         assert!(f.is_empty(), "{:?}", ids(&f));
         // The certificate after the leaf is still the chain, not the leaf.
         assert_eq!(data.chain.len(), 1);
+    }
+
+    #[test]
+    fn sha1_matters_below_the_root_only() {
+        let der = leaf(&["example.com"], (2026, 9, 1), (2026, 12, 1), vec![1; 20]);
+        let valid = || Verification::Valid;
+        // A self-signed root with SHA-1 is ignored by browsers.
+        let (_, f) = examine(
+            &tls_info(vec![der.clone(), sha1_self_signed_root()], valid()),
+            &host("example.com"),
+            NOW,
+        );
+        assert!(f.is_empty(), "{:?}", ids(&f));
+        // An intermediate (issuer differs from subject) signed with SHA-1 breaks the chain.
+        let intermediate = relabel_sha1(&leaf(&["ca.example"], (2026, 9, 1), (2026, 12, 1), vec![2; 20]));
+        let (_, f) = examine(&tls_info(vec![der, intermediate], valid()), &host("example.com"), NOW);
+        assert_eq!(ids(&f), ["tls.cert.sha1"]);
     }
 
     #[test]
