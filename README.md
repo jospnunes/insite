@@ -29,7 +29,7 @@ stack     WordPress 7.2 · WordPress Block Editor · Gutenberg 24.3.0 · MySQL �
 security  C   score 55 · 4 issues
 tls       Let's Encrypt · TLS 1.3 · expires in 54 days
 seo       indexable
-weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party
+weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party in the HTML
 
   medium  No Content Security Policy  sec.csp.missing
   low     HSTS max-age is shorter than six months  sec.hsts.short

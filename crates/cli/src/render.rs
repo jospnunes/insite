@@ -210,6 +210,7 @@ pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static 
     }) {
         lines.push(("seo", text));
     }
+    let browser = m.browser.data.as_ref();
     if let Some(text) = summary(&m.weight, s, |w| {
         let mut size = bytes(w.html_transferred_bytes);
         if w.html_bytes != w.html_transferred_bytes {
@@ -219,7 +220,10 @@ pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static 
         if !w.render_blocking_scripts.is_empty() {
             parts.push(format!("{} render-blocking", w.render_blocking_scripts.len()));
         }
-        parts.push(plural(w.third_parties.len(), "third party").replace("partys", "parties"));
+        parts.push(third_parties(
+            w.third_parties.len(),
+            browser.map(|b| b.third_party_domains),
+        ));
         parts.join(" · ")
     }) {
         lines.push(("weight", text));
@@ -948,6 +952,17 @@ pub fn bytes(n: u64) -> String {
     format_bytes(n)
 }
 
+/// The third-party count. Without the browser it only covers what the HTML references,
+/// which is usually far fewer than the page loads, so the label says so; with the
+/// browser it is the number of domains actually requested.
+fn third_parties(in_html: usize, browser: Option<usize>) -> String {
+    let label = |n: usize| plural(n, "third party").replace("partys", "parties");
+    match browser {
+        Some(n) => label(n),
+        None => format!("{} in the HTML", label(in_html)),
+    }
+}
+
 fn plural(n: usize, word: &str) -> String {
     format!("{n} {word}{}", if n == 1 { "" } else { "s" })
 }
@@ -1141,5 +1156,81 @@ pub(crate) mod tests {
         let line = email(&unknown, &s);
         assert!(line.starts_with("route1.mx.cloudflare.net ·"), "{line}");
         assert!(!line.contains("28") && !line.contains(" 5 "), "{line}");
+    }
+
+    fn weight_report(browser_third_parties: Option<usize>) -> Report {
+        use insite_core::analyze::browser::Browser;
+        use insite_core::analyze::weight::{ThirdParty, Weight};
+        let mut report = hostile_report();
+        report.modules.weight = Module {
+            status: Status::Ok,
+            reason: None,
+            data: Some(Weight {
+                html_transferred_bytes: 162_000,
+                html_bytes: 934_000,
+                compression: Some("br".into()),
+                scripts_external: 4,
+                scripts_inline: 0,
+                inline_script_bytes: 0,
+                render_blocking_scripts: Vec::new(),
+                stylesheets: 0,
+                inline_styles: 0,
+                inline_style_bytes: 0,
+                images: 0,
+                image_formats: BTreeMap::new(),
+                images_lazy: 0,
+                images_without_dimensions: 0,
+                iframes: 0,
+                preload: 0,
+                preconnect: 0,
+                third_parties: vec![ThirdParty {
+                    domain: "cdn.example.net".into(),
+                    resources: 1,
+                    kinds: vec!["script"],
+                    technologies: Vec::new(),
+                }],
+            }),
+            findings: Vec::new(),
+        };
+        if let Some(n) = browser_third_parties {
+            report.modules.browser = Module {
+                status: Status::Ok,
+                reason: None,
+                data: Some(Browser {
+                    product: "Chrome".into(),
+                    profile: "desktop, unthrottled".into(),
+                    url: "https://example.com/".into(),
+                    metrics: Vec::new(),
+                    requests: 40,
+                    transferred_bytes: 1_000_000,
+                    by_type: Vec::new(),
+                    heaviest: Vec::new(),
+                    third_party_bytes: 500_000,
+                    third_party_share: 0.5,
+                    third_party_domains: n,
+                    failed: Vec::new(),
+                    console_errors: Vec::new(),
+                    load_ms: None,
+                }),
+                findings: Vec::new(),
+            };
+        }
+        report
+    }
+
+    #[test]
+    fn third_party_count_says_it_comes_from_the_html_without_the_browser() {
+        let lines = summary_lines(&weight_report(None), &Style::new(false), 100);
+        let weight = &lines.iter().find(|(l, _)| *l == "weight").unwrap().1;
+        assert!(weight.contains("1 third party in the HTML"), "{weight}");
+        assert!(weight.starts_with("HTML 162 KB (934 KB uncompressed)"), "{weight}");
+    }
+
+    #[test]
+    fn third_party_count_comes_from_the_browser_when_it_ran() {
+        let lines = summary_lines(&weight_report(Some(14)), &Style::new(false), 100);
+        let weight = &lines.iter().find(|(l, _)| *l == "weight").unwrap().1;
+        assert!(weight.contains("14 third parties"), "{weight}");
+        assert!(!weight.contains("in the HTML"), "{weight}");
     }
 }

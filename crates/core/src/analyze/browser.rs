@@ -25,6 +25,8 @@ pub struct Browser {
     pub heaviest: Vec<Heavy>,
     pub third_party_bytes: u64,
     pub third_party_share: f64,
+    /// Registrable domains other than the page's that the browser requested from.
+    pub third_party_domains: usize,
     pub failed: Vec<String>,
     pub console_errors: Vec<String>,
     pub load_ms: Option<f64>,
@@ -182,14 +184,16 @@ fn report(b: &BrowserData, profile: String) -> Browser {
         .unwrap_or_default();
     let mut by_type: BTreeMap<String, (usize, u64)> = BTreeMap::new();
     let mut third_party_bytes = 0;
+    let mut third_party_domains = std::collections::BTreeSet::new();
     let mut failed = Vec::new();
     for r in &b.resources {
         let entry = by_type.entry(r.kind.clone()).or_default();
         entry.0 += 1;
         entry.1 += r.transferred;
         let host = url::Url::parse(&r.url).ok().and_then(|u| u.host_str().map(registrable));
-        if host.is_some_and(|h| h != own) {
+        if let Some(host) = host.filter(|h| *h != own) {
             third_party_bytes += r.transferred;
+            third_party_domains.insert(host);
         }
         match (&r.failed, r.status) {
             // A navigation or script cancelling a request is not an error.
@@ -228,6 +232,7 @@ fn report(b: &BrowserData, profile: String) -> Browser {
         by_type,
         heaviest,
         third_party_bytes,
+        third_party_domains: third_party_domains.len(),
         third_party_share: if transferred_bytes > 0 {
             third_party_bytes as f64 / transferred_bytes as f64
         } else {
@@ -303,6 +308,9 @@ mod tests {
         assert_eq!(data.requests, 5);
         assert_eq!(data.transferred_bytes, 330_500);
         assert_eq!(data.third_party_bytes, 100_000);
+        // `static.example.com` is the page's own registrable domain; the aborted request still
+        // went to `ads.net`.
+        assert_eq!(data.third_party_domains, 2);
         assert_eq!(data.by_type[0].kind, "Script");
         assert_eq!((data.by_type[0].count, data.by_type[0].bytes), (3, 300_000));
         assert_eq!(data.heaviest[0].url, "https://static.example.com/app.js");
