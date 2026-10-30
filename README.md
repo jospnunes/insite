@@ -100,12 +100,15 @@ insite [options] <url>...
 
 insite explain <id>          a finding, why it matters and how to fix it
 insite update                newest webappanalyzer signatures into the cache
+      --force                download and compile even when they are up to date
+      --native-roots         trust the system's certificate store for the download
 ```
 
 Several sites at once: `insite a.com b.com`, or a list on standard input
 (`insite < sites.txt`). Analyses of the same registrable domain run one after
 another, with a pause between them. `--ndjson` prints one report per line as
-sites finish; `--md` writes a report ready to paste into an e-mail.
+sites finish (with `--browser`, two per site: the `fast` report, then the `full` one,
+told apart by the `phase` field); `--md` writes a report ready to paste into an e-mail.
 
 **Exit codes:** 0 complete; 1 unreachable; 2 usage error; 3 partial in a way
 that changes the reading (a module timed out or failed, or the page does not

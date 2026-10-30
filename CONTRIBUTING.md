@@ -12,7 +12,10 @@ Thank you for helping. A few rules keep insite trustworthy:
   `crates/core/findings/<id>.md` (severity, title, detail and fix) and an entry
   in `findings.rs`; ids are stable once released.
 - **Tests use synthetic fixtures** (local servers in `crates/core/tests`), never
-  recordings of real sites.
+  recordings of real sites. The exceptions are the labeled-precision and the
+  conformance tests: they read the private fixtures repository (recorded pages)
+  through `INSITE_FIXTURES` and pass trivially without it, as in forks. The
+  conformance test also needs Node. Neither runs unless you set the variable.
 
 Before sending a change:
 
