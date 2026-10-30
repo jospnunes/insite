@@ -15,7 +15,7 @@ use serde::Serialize;
 use url::Url;
 
 pub use charset::{decode, sniff_html};
-use stack::{is_void, starts_body_content};
+use stack::{MAX_DEPTH, is_void, starts_body_content};
 
 /// Text kept per element, for signature `text` conditions.
 const ELEMENT_TEXT_LIMIT: usize = 256;
@@ -168,11 +168,11 @@ pub fn extract(body: &[u8], content_type: Option<&str>, page_url: &Url) -> PageF
             .append_element_content_handler(element!("*", move |el| {
                 let tag = el.tag_name();
                 let attrs: Vec<(String, String)> = el.attributes().iter().map(|a| (a.name(), a.value())).collect();
-                let pushed = on_element.borrow_mut().open(&tag, attrs, el.can_have_content());
-                if pushed && let Some(handlers) = el.end_tag_handlers() {
+                let (needs_end, on_stack) = on_element.borrow_mut().open(&tag, attrs, el.can_have_content());
+                if needs_end && let Some(handlers) = el.end_tag_handlers() {
                     let on_end = on_element.clone();
                     let handler: lol_html::EndTagHandler<'static> = Box::new(move |_end| {
-                        on_end.borrow_mut().close(&tag);
+                        on_end.borrow_mut().close(&tag, on_stack);
                         Ok(())
                     });
                     handlers.push(handler);
@@ -238,9 +238,12 @@ impl State {
         self.base.join(href).ok().map(String::from)
     }
 
-    /// Records an element; returns whether it was pushed on the stack of open
-    /// elements (and so needs an end-tag handler).
-    fn open(&mut self, tag: &str, attrs: Vec<(String, String)>, can_have_content: bool) -> bool {
+    /// Records an element. Returns whether it needs an end-tag handler and
+    /// whether it was pushed on the stack of open elements. Past `MAX_DEPTH` an
+    /// element still gets its handler (so a script or title is read to its end)
+    /// but is not pushed: it hangs off the deepest open element, as in browsers
+    /// that cap nesting, and its end tag closes nothing.
+    fn open(&mut self, tag: &str, attrs: Vec<(String, String)>, can_have_content: bool) -> (bool, bool) {
         stack::close_implied(tag, &mut self.stack, &self.elements);
         if tag == "body" || starts_body_content(tag) {
             self.in_body = true;
@@ -340,18 +343,21 @@ impl State {
             parent,
             text: String::new(),
         });
-        let pushed = can_have_content && !is_void(tag);
-        if pushed {
+        let needs_end = can_have_content && !is_void(tag);
+        let on_stack = needs_end && self.stack.len() < MAX_DEPTH;
+        if on_stack {
             self.stack.push(self.elements.len() - 1);
-        } else {
+        } else if !needs_end {
             self.end_of(tag);
         }
-        pushed
+        (needs_end, on_stack)
     }
 
-    /// An end tag: pops up to and including the nearest open element of that name.
-    fn close(&mut self, tag: &str) {
-        if let Some(pos) = self.stack.iter().rposition(|&i| self.elements[i].tag == tag) {
+    /// An end tag: pops up to and including the nearest open element of that name
+    /// (a scan of at most `MAX_DEPTH` entries). An element that was never pushed
+    /// closes nothing.
+    fn close(&mut self, tag: &str, on_stack: bool) {
+        if on_stack && let Some(pos) = self.stack.iter().rposition(|&i| self.elements[i].tag == tag) {
             self.stack.truncate(pos);
         }
         self.end_of(tag);

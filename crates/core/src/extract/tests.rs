@@ -118,3 +118,66 @@ fn malformed_input_does_not_panic() {
         let _ = page(html);
     }
 }
+
+fn depth_of(facts: &PageFacts, mut i: usize) -> usize {
+    let mut depth = 0;
+    while let Some(p) = facts.elements[i].parent {
+        depth += 1;
+        i = p;
+    }
+    depth
+}
+
+#[test]
+fn hostile_nesting_is_linear() {
+    // Open elements that never close, then table cells whose target is not open:
+    // every `<td>` used to walk the whole stack.
+    let mut html = String::from("<body>");
+    html.push_str(&"<b>".repeat(200_000));
+    html.push_str(&"<td></td>".repeat(50_000));
+    let started = std::time::Instant::now();
+    let facts = page(&html);
+    let elapsed = started.elapsed();
+    assert!(elapsed.as_secs() < 10, "extraction took {elapsed:?}");
+    assert_eq!(facts.elements.iter().filter(|e| e.tag == "td").count(), 50_000);
+    let deepest = (0..facts.elements.len()).map(|i| depth_of(&facts, i)).max().unwrap();
+    assert!(deepest <= 512, "nesting depth {deepest}");
+}
+
+#[test]
+fn hostile_end_tags_are_linear() {
+    let mut html = String::from("<body>");
+    html.push_str(&"<b>".repeat(100_000));
+    html.push_str(&"<i></i>".repeat(100_000));
+    html.push_str(&"</b>".repeat(100_000));
+    let started = std::time::Instant::now();
+    let facts = page(&html);
+    let elapsed = started.elapsed();
+    assert!(elapsed.as_secs() < 10, "extraction took {elapsed:?}");
+    assert_eq!(facts.elements.len(), 1 + 100_000 + 100_000);
+}
+
+#[test]
+fn deep_nesting_still_closes_correctly() {
+    let mut html = String::from("<div id=top>");
+    html.push_str(&"<section>".repeat(600));
+    html.push_str("<span>x</span>");
+    html.push_str(&"</section>".repeat(600));
+    html.push_str("</div><footer>z</footer>");
+    let facts = page(&html);
+    // Past the cap elements hang off the deepest open one, and their end tags do
+    // not close anything else.
+    assert_eq!(parent_tag(&facts, "footer", 0), None);
+    assert!(parent_tag(&facts, "span", 0).is_some());
+    assert_eq!(facts.elements.iter().filter(|e| e.tag == "section").count(), 600);
+}
+
+#[test]
+fn script_past_the_depth_cap_is_still_read() {
+    let mut html = String::from("<body>");
+    html.push_str(&"<div>".repeat(600));
+    html.push_str(r#"<script type="application/ld+json">{"a":1}</script><p>after</p>"#);
+    let facts = page(&html);
+    assert_eq!(facts.json_ld, [r#"{"a":1}"#]);
+    assert_eq!(facts.scripts.len(), 1);
+}

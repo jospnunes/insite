@@ -45,8 +45,9 @@ impl<'a> ElementIndex<'a> {
         let mut found: Vec<usize> = Vec::new();
         for complex in &list.0 {
             let Some((_, last)) = complex.0.last() else { continue };
+            let mut memo = HashMap::new();
             for i in self.candidates(last) {
-                if self.matches_complex(complex, complex.0.len() - 1, i) {
+                if self.matches_complex(complex, complex.0.len() - 1, i, &mut memo) {
                     found.push(i);
                 }
             }
@@ -73,7 +74,12 @@ impl<'a> ElementIndex<'a> {
     /// Whether element `i` matches compound `at` of `complex` and, through the
     /// combinators, everything to its left. Descendant combinators backtrack over
     /// every ancestor, so `a b c` is right even when the nearest `b` fails.
-    fn matches_complex(&self, complex: &Complex, at: usize, i: usize) -> bool {
+    ///
+    /// `memo` remembers, per (compound, element), whether some ancestor of the
+    /// element satisfies the rest of the selector up to that compound. Ancestors
+    /// are shared by many elements, so each is evaluated once and the whole
+    /// match stays linear in the page instead of exponential in the compounds.
+    fn matches_complex(&self, complex: &Complex, at: usize, i: usize, memo: &mut Memo) -> bool {
         let (combinator, compound) = &complex.0[at];
         if !matches_compound(compound, &self.elements[i]) {
             return false;
@@ -81,21 +87,41 @@ impl<'a> ElementIndex<'a> {
         if at == 0 {
             return true;
         }
-        let mut parent = self.elements[i].parent;
+        let parent = self.elements[i].parent;
         match combinator {
-            Combinator::Child => parent.is_some_and(|p| self.matches_complex(complex, at - 1, p)),
-            Combinator::Descendant => {
-                while let Some(p) = parent {
-                    if self.matches_complex(complex, at - 1, p) {
-                        return true;
-                    }
-                    parent = self.elements[p].parent;
-                }
-                false
-            }
+            Combinator::Child => parent.is_some_and(|p| self.matches_complex(complex, at - 1, p, memo)),
+            Combinator::Descendant => self.ancestor_matches(complex, at - 1, i, memo),
         }
     }
+
+    /// Whether some proper ancestor of `i` matches `complex` up to compound `at`.
+    fn ancestor_matches(&self, complex: &Complex, at: usize, i: usize, memo: &mut Memo) -> bool {
+        // Elements walked without an answer yet; all share the one found at the end,
+        // because each is a descendant of the next one up.
+        let mut walked = Vec::new();
+        let mut current = i;
+        let found = loop {
+            if let Some(&known) = memo.get(&(at, current)) {
+                break known;
+            }
+            walked.push(current);
+            let Some(parent) = self.elements[current].parent else {
+                break false;
+            };
+            if self.matches_complex(complex, at, parent, memo) {
+                break true;
+            }
+            current = parent;
+        };
+        for element in walked {
+            memo.insert((at, element), found);
+        }
+        found
+    }
 }
+
+/// See `matches_complex`.
+type Memo = HashMap<(usize, usize), bool>;
 
 fn matches_compound(compound: &Compound, element: &Element) -> bool {
     if compound.tag.as_ref().is_some_and(|t| *t != element.tag) {
@@ -181,5 +207,23 @@ mod tests {
         let index = ElementIndex::new(&elements);
         assert_eq!(tags(&index, "div.outer span script"), ["script"]);
         assert_eq!(tags(&index, ".outer .mid > span > script"), ["script"]);
+    }
+
+    #[test]
+    fn deep_chains_with_many_descendant_compounds_stay_fast() {
+        // 3000 nested divs, then a span: `p div div div span` fails (no `p`), and
+        // naive backtracking tries every combination of ancestors.
+        let mut elements = vec![el("div", &[], None)];
+        for i in 1..3000 {
+            elements.push(el("div", &[], Some(i - 1)));
+        }
+        elements.push(el("span", &[], Some(2999)));
+        let index = ElementIndex::new(&elements);
+        let started = std::time::Instant::now();
+        assert!(tags(&index, "p div div div span").is_empty());
+        assert!(tags(&index, "div div div div div").len() >= 2000);
+        assert_eq!(tags(&index, "div div div div > span"), ["span"]);
+        let elapsed = started.elapsed();
+        assert!(elapsed.as_secs() < 2, "matching took {elapsed:?}");
     }
 }

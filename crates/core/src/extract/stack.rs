@@ -5,6 +5,10 @@
 
 use super::Element;
 
+/// Deepest nesting kept on the stack of open elements; browsers cap it at 512 too.
+/// It also bounds every scan of the stack, so hostile pages cost linear time.
+pub const MAX_DEPTH: usize = 512;
+
 const VOID: &[&str] = &[
     "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr",
 ];
