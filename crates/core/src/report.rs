@@ -17,6 +17,21 @@ use crate::analyze::weight::Weight;
 /// Semver: a new field bumps the minor version, a removal or type change the major.
 pub const SCHEMA_VERSION: &str = "0.1.0";
 
+/// A byte count for people: `512 B`, `86 KB`, `1.3 MB`. Units are decimal (1 KB = 1000
+/// bytes, as network tools count transfer), and every size in the report and in the
+/// findings comes through here so they always agree.
+pub fn format_bytes(n: u64) -> String {
+    if n < 1_000 {
+        return format!("{n} B");
+    }
+    let kb = (n as f64 / 1e3).round();
+    if kb < 1_000.0 {
+        format!("{kb:.0} KB")
+    } else {
+        format!("{:.1} MB", n as f64 / 1e6)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct Report {
     pub schema_version: &'static str,
@@ -247,5 +262,16 @@ mod tests {
         assert!(Selection::parse("tls,css").unwrap_err().contains("css"));
         assert!(Selection::parse(",").is_err());
         assert!(ModuleName::ALL.iter().all(|m| Selection::all().contains(*m)));
+    }
+
+    #[test]
+    fn sizes_are_decimal_and_never_overflow_a_unit() {
+        assert_eq!(format_bytes(0), "0 B");
+        assert_eq!(format_bytes(999), "999 B");
+        assert_eq!(format_bytes(1_000), "1 KB");
+        assert_eq!(format_bytes(934_100), "934 KB");
+        assert_eq!(format_bytes(999_499), "999 KB");
+        assert_eq!(format_bytes(999_500), "1.0 MB");
+        assert_eq!(format_bytes(1_305_000), "1.3 MB");
     }
 }

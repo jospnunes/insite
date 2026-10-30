@@ -8,7 +8,7 @@ use serde::Serialize;
 use super::content::Content;
 use crate::collect::records::registrable;
 use crate::findings::finding;
-use crate::report::{Finding, Module, Status};
+use crate::report::{Finding, Module, Status, format_bytes};
 use crate::snapshot::Snapshot;
 
 /// Text bodies smaller than this gain little from compression.
@@ -126,7 +126,7 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
     if compression.is_none() && html_bytes >= COMPRESSION_MIN {
         findings.push(finding(
             "weight.uncompressed",
-            &[("size", kib(html_bytes))],
+            &[("size", format_bytes(html_bytes))],
             format!("{html_bytes} bytes without Content-Encoding"),
         ));
     }
@@ -140,7 +140,7 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
     if html_bytes > LARGE_HTML {
         findings.push(finding(
             "weight.html_large",
-            &[("size", kib(html_bytes))],
+            &[("size", format_bytes(html_bytes))],
             format!("{html_bytes} bytes of HTML"),
         ));
     }
@@ -204,10 +204,6 @@ fn image_format(url: &str) -> Option<&'static str> {
     })
 }
 
-fn kib(bytes: u64) -> String {
-    format!("{} KB", bytes.div_ceil(1024))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -217,5 +213,30 @@ mod tests {
         assert_eq!(image_format("https://x/a.JPG?w=100"), Some("jpeg"));
         assert_eq!(image_format("https://x/a.webp#x"), Some("webp"));
         assert_eq!(image_format("https://x/image"), None);
+    }
+
+    #[test]
+    fn finding_sizes_use_the_shared_formatter() {
+        // 934 000 bytes: the weight line prints "934 KB", and so must the finding.
+        let body = format!(
+            "<html><head><title>t</title></head><body>{}</body></html>",
+            "x".repeat(600_000)
+        );
+        let mut snapshot = crate::analyze::infra::tests::snapshot_with(200, &[("content-type", "text/html")], &body);
+        let len = snapshot.page.as_ref().unwrap().body.len() as u64;
+        snapshot.page.as_mut().unwrap().transferred = len;
+        let content = crate::analyze::content::content(&snapshot);
+        let module = analyze(&snapshot, &content);
+        let size = format_bytes(len);
+        assert_eq!(size, "600 KB");
+        for id in ["weight.uncompressed", "weight.html_large"] {
+            let f = module
+                .findings
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap_or_else(|| panic!("{id}"));
+            assert_eq!(f.params["size"], size);
+            assert!(f.title.contains(&size), "{}", f.title);
+        }
     }
 }

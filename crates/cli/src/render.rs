@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use insite_core::analyze::dns::DomainReport;
 use insite_core::analyze::network::{HttpsEnforcement, Network};
-use insite_core::report::{Finding, Module, Outcome, Report, Severity, Status};
+use insite_core::report::{Finding, Module, Outcome, Report, Severity, Status, format_bytes};
 
 use crate::style::{Style, neutralize, wrap_items};
 
@@ -943,12 +943,9 @@ pub fn ms(value: f64) -> String {
     }
 }
 
+/// The one size formatter, shared with the findings (see `format_bytes`).
 pub fn bytes(n: u64) -> String {
-    match n {
-        0..1_000 => format!("{n} B"),
-        1_000..1_000_000 => format!("{:.0} KB", n as f64 / 1e3),
-        _ => format!("{:.1} MB", n as f64 / 1e6),
-    }
+    format_bytes(n)
 }
 
 fn plural(n: usize, word: &str) -> String {
@@ -1082,6 +1079,7 @@ pub(crate) mod tests {
         assert_eq!(bytes(512), "512 B");
         assert_eq!(bytes(86_400), "86 KB");
         assert_eq!(bytes(1_250_000), "1.2 MB");
+        assert_eq!(bytes(999_999), "1.0 MB");
         assert_eq!(short_as_name("CLOUDFLARENET, US"), "CLOUDFLARENET");
         assert_eq!(short_as_name("Some Org, Inc"), "Some Org, Inc");
         assert_eq!(plural(1, "issue"), "1 issue");
