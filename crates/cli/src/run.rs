@@ -65,9 +65,16 @@ pub fn run(mut plan: Plan) -> ExitCode {
         && matches!(plan.format, Format::Terminal { .. })
         && std::io::stdout().is_terminal();
     let mut targets = Vec::new();
+    let mut warned_credentials = false;
     for (i, input) in plan.inputs.iter().enumerate() {
         match Target::parse(input) {
-            Ok(t) => targets.push((i, t)),
+            Ok(t) => {
+                if t.credentials_ignored && !warned_credentials {
+                    warned_credentials = true;
+                    eprintln!("insite: credentials in the URL are ignored (they are not sent or saved)");
+                }
+                targets.push((i, t));
+            }
             Err(e) => {
                 eprintln!("insite: {input}: {e}");
                 printer.exit.usage = true;

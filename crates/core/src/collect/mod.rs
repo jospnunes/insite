@@ -420,6 +420,10 @@ pub fn sitemap_from_robots(robots: &str, origin: &Url) -> Option<Url> {
             .join(value.trim())
             .ok()
             .filter(|u| matches!(u.scheme(), "http" | "https"))
+            .map(|mut u| {
+                self::target::strip_userinfo(&mut u);
+                u
+            })
     })
 }
 
@@ -633,6 +637,11 @@ impl<'a> Session<'a> {
             hop.header("location")
                 .and_then(|location| url.join(location).ok())
                 .filter(|next| matches!(next.scheme(), "http" | "https"))
+                .map(|mut next| {
+                    // A redirect to `https://user:pass@host/` is followed without them.
+                    self::target::strip_userinfo(&mut next);
+                    next
+                })
         } else {
             None
         };

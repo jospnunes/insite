@@ -127,6 +127,34 @@ async fn same_origin_redirect_reuses_the_connection() {
     assert_eq!(report.outcome, Outcome::Complete);
 }
 
+/// `user:pass@` in the input or in a redirect never reaches the snapshot.
+#[tokio::test(flavor = "multi_thread")]
+async fn credentials_in_urls_are_not_stored() {
+    let server = Server::start(TlsMode::Plain, 0, |req| async move {
+        match req.uri().path() {
+            "/old" => {
+                let host = req.headers().get("host").unwrap().to_str().unwrap().to_owned();
+                redirect(301, &format!("http://outro:senha2@{host}/new"))
+            }
+            _ => ok("new page"),
+        }
+    })
+    .await;
+    let target = Target::parse(&format!("http://ana:segredo@localhost:{}/old", server.addr.port())).unwrap();
+    assert!(target.credentials_ignored);
+    let snap = Collector::new(&[]).unwrap().collect(&target, &options()).await;
+
+    assert_eq!(snap.chain.len(), 2, "{:?}", snap.failure);
+    let mut stored = vec![snap.input.clone()];
+    stored.extend(snap.chain.iter().map(|hop| hop.url.clone()));
+    for text in &stored {
+        assert!(!text.contains("segredo") && !text.contains("senha2"), "{text}");
+    }
+    // The server's own Location header is its data; the user's password is not in it.
+    assert!(!serde_json::to_string(&snap).unwrap().contains("segredo"));
+    assert!(snap.chain[1].url.ends_with("/new"), "{}", snap.chain[1].url);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn redirect_loop_becomes_a_finding() {
     let server = Server::start(TlsMode::Tls(H2_AND_H1), 0, |_| async { redirect(302, "/loop") }).await;
