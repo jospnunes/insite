@@ -8,7 +8,7 @@ use super::infra;
 use super::network::opener;
 use crate::detect::{self, ElementIndex, Inputs, Technology};
 use crate::report::{Module, Status};
-use crate::snapshot::Snapshot;
+use crate::snapshot::{Hop, Snapshot};
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Stack {
@@ -54,68 +54,7 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
         };
     };
 
-    let mut inputs = Inputs {
-        headers: last
-            .headers
-            .iter()
-            .map(|(n, v)| (n.to_ascii_lowercase(), v.clone()))
-            .collect(),
-        cookies: snapshot
-            .chain
-            .iter()
-            .flat_map(|hop| hop.headers.iter())
-            .filter(|(n, _)| n.eq_ignore_ascii_case("set-cookie"))
-            .filter_map(|(_, v)| {
-                let pair = v.split(';').next()?;
-                let (name, value) = pair.split_once('=')?;
-                Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
-            })
-            .collect(),
-        url: vec![last.url.clone()],
-        ..Default::default()
-    };
-    for domain in &snapshot.dns {
-        for (name, rtype) in [
-            (domain.registrable.as_str(), "TXT"),
-            (domain.registrable.as_str(), "MX"),
-            (domain.registrable.as_str(), "NS"),
-            (domain.registrable.as_str(), "SOA"),
-            (domain.host.as_str(), "CNAME"),
-        ] {
-            inputs.dns.extend(
-                domain
-                    .records(name, rtype)
-                    .iter()
-                    .map(|r| (rtype.to_owned(), r.clone())),
-            );
-        }
-    }
-    inputs.cert_issuer = opener(&snapshot.chain, last)
-        .and_then(|c| c.tls.as_ref())
-        .and_then(|tls| tls.certificates.first())
-        .and_then(|der| parse_x509_certificate(der).ok())
-        .map(|(_, cert)| {
-            let issuer = cert.issuer();
-            issuer
-                .iter_organization()
-                .chain(issuer.iter_common_name())
-                .filter_map(|a| a.as_str().ok())
-                .collect::<Vec<_>>()
-                .join(", ")
-        });
-    if let Some(robots) = snapshot.auxiliary.robots.as_ref().filter(|r| r.status == Some(200)) {
-        inputs.robots = Some(String::from_utf8_lossy(&robots.body).into_owned());
-    }
-
-    let limitation = match content {
-        Ok(content) => {
-            fill_page(&mut inputs, &content.facts);
-            content.limitation.clone()
-        }
-        Err(reason) => Some(format!(
-            "only headers, cookies, DNS and the certificate were checked: {reason}"
-        )),
-    };
+    let (inputs, limitation) = static_inputs(snapshot, last, content);
 
     let engine = detect::engine();
     let mut technologies = engine.detect(&inputs);
@@ -187,6 +126,130 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
         data: Some(data),
         findings: Vec::new(),
     }
+}
+
+/// For the conformance test against the webappanalyzer JavaScript core: the
+/// static inputs in that core's format, and what our engine detects in them
+/// without the element index, which that core does not read (its browser
+/// extension did). `None` where this module concludes nothing: a bot
+/// challenge or no response.
+#[doc(hidden)]
+pub fn reference_case(snapshot: &Snapshot) -> Option<(serde_json::Value, Vec<Technology>)> {
+    if infra::challenge(snapshot).is_some() {
+        return None;
+    }
+    let last = snapshot.chain.last()?;
+    let content = super::content::content(snapshot);
+    let (mut inputs, _) = static_inputs(snapshot, last, &content);
+    inputs.elements = None;
+    let detected = detect::engine().detect(&inputs);
+    Some((reference_items(&inputs), detected))
+}
+
+/// The inputs as the JavaScript core takes them: a string for each field read
+/// whole, a list of script sources, and lists by lowercase key for the rest.
+/// Inline scripts go as one text; the core reads that field whole. Our engine
+/// reads them one by one, so a pattern anchored with `^` or `$`, or one spanning
+/// two scripts, can differ there.
+fn reference_items(inputs: &Inputs) -> serde_json::Value {
+    fn by_key(pairs: &[(String, String)]) -> serde_json::Map<String, serde_json::Value> {
+        let mut map = serde_json::Map::new();
+        for (key, value) in pairs {
+            if let serde_json::Value::Array(values) = map
+                .entry(key.to_ascii_lowercase())
+                .or_insert_with(|| serde_json::Value::Array(Vec::new()))
+            {
+                values.push(value.as_str().into());
+            }
+        }
+        map
+    }
+    serde_json::json!({
+        "url": inputs.url.first(),
+        "html": inputs.html,
+        "text": inputs.text,
+        "scriptSrc": inputs.script_src,
+        "scripts": inputs.scripts.join("\n"),
+        "meta": by_key(&inputs.meta),
+        "headers": by_key(&inputs.headers),
+        "cookies": by_key(&inputs.cookies),
+        "dns": by_key(&inputs.dns),
+        "certIssuer": inputs.cert_issuer,
+        "robots": inputs.robots,
+    })
+}
+
+/// What the signatures see without a browser: the final response's headers
+/// and URL, the chain's cookies, DNS, the certificate issuer, robots.txt and
+/// the page, with what limits that reading.
+fn static_inputs<'a>(
+    snapshot: &Snapshot,
+    last: &Hop,
+    content: &'a Result<Content, String>,
+) -> (Inputs<'a>, Option<String>) {
+    let mut inputs = Inputs {
+        headers: last
+            .headers
+            .iter()
+            .map(|(n, v)| (n.to_ascii_lowercase(), v.clone()))
+            .collect(),
+        cookies: snapshot
+            .chain
+            .iter()
+            .flat_map(|hop| hop.headers.iter())
+            .filter(|(n, _)| n.eq_ignore_ascii_case("set-cookie"))
+            .filter_map(|(_, v)| {
+                let pair = v.split(';').next()?;
+                let (name, value) = pair.split_once('=')?;
+                Some((name.trim().to_ascii_lowercase(), value.trim().to_owned()))
+            })
+            .collect(),
+        url: vec![last.url.clone()],
+        ..Default::default()
+    };
+    for domain in &snapshot.dns {
+        for (name, rtype) in [
+            (domain.registrable.as_str(), "TXT"),
+            (domain.registrable.as_str(), "MX"),
+            (domain.registrable.as_str(), "NS"),
+            (domain.registrable.as_str(), "SOA"),
+            (domain.host.as_str(), "CNAME"),
+        ] {
+            inputs.dns.extend(
+                domain
+                    .records(name, rtype)
+                    .iter()
+                    .map(|r| (rtype.to_owned(), r.clone())),
+            );
+        }
+    }
+    inputs.cert_issuer = opener(&snapshot.chain, last)
+        .and_then(|c| c.tls.as_ref())
+        .and_then(|tls| tls.certificates.first())
+        .and_then(|der| parse_x509_certificate(der).ok())
+        .map(|(_, cert)| {
+            let issuer = cert.issuer();
+            issuer
+                .iter_organization()
+                .chain(issuer.iter_common_name())
+                .filter_map(|a| a.as_str().ok())
+                .collect::<Vec<_>>()
+                .join(", ")
+        });
+    if let Some(robots) = snapshot.auxiliary.robots.as_ref().filter(|r| r.status == Some(200)) {
+        inputs.robots = Some(String::from_utf8_lossy(&robots.body).into_owned());
+    }
+
+    let limitation = match content {
+        Ok(content) => {
+            fill_page(&mut inputs, &content.facts);
+            content.limitation.clone()
+        }
+        Err(reason) => Some(format!(
+            "only headers, cookies, DNS and the certificate were checked: {reason}"
+        )),
+    };
+    (inputs, limitation)
 }
 
 /// The inputs that come from a page: metas, scripts, HTML, text and elements.

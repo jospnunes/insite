@@ -1,0 +1,8 @@
+# wappalyzer.js is the analysis core of Wappalyzer, unchanged from the last
+# open-source release on npm (the package is no longer maintained, which suits
+# a fixed reference). It reads no files and opens no connections.
+source = "wappalyzer-core@6.10.66"
+url = "https://registry.npmjs.org/wappalyzer-core/-/wappalyzer-core-6.10.66.tgz"
+integrity = "sha512-7EOYy4DpdRcfoW00SfCwKjJE3//AAbyl2dzuG6DgICKPoRf60ero/1fBHOB2ipVTmIxpnnlsJ8jY0r5McwRwtA=="
+sha256 = "9888f3445d88b997669132da5c134b688979e4e7cf48b078454bc3ca30b51756"
+license = "GPL-3.0"
