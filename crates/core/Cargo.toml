@@ -49,4 +49,3 @@ hyper = { workspace = true, features = ["server", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["tokio", "server", "server-auto"] }
 rcgen = "0.14"
 brotli = "8"
-serde_json.workspace = true
