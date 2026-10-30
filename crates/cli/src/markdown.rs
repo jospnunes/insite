@@ -2,9 +2,11 @@
 
 use std::fmt::Write;
 
+use insite_core::detect::Technology;
 use insite_core::report::{Finding, Outcome, Report, Severity};
 
 use crate::render::{clip, evidence_text, ms, severity, summary_lines};
+use crate::stackview;
 use crate::style::{Style, neutralize, visible_len};
 
 /// The report as Markdown. Control characters from the page are neutralized, so
@@ -43,7 +45,7 @@ fn markdown(report: &Report) -> String {
         return out;
     }
 
-    let lines = summary_lines(report, &plain, usize::MAX);
+    let lines = summary_lines(report, &plain, usize::MAX, false);
     if !lines.is_empty() {
         out.push_str("| Area | Result |\n| --- | --- |\n");
         for (label, text) in lines {
@@ -95,32 +97,10 @@ fn markdown(report: &Report) -> String {
         }
     }
 
-    if let Some(stack) = m.stack.data.as_ref().filter(|s| !s.technologies.is_empty()) {
-        out.push_str(
-            "## Technologies\n\n| Technology | Version | Category | Detected from |\n| --- | --- | --- | --- |\n",
-        );
-        for t in &stack.technologies {
-            let mut name = escape(&t.name);
-            if t.confidence < 100 {
-                name.push_str(&format!(" (probable, {}%)", t.confidence));
-            }
-            let evidence = match &t.implied_by {
-                Some(by) => format!("implied by {}", escape(by)),
-                None => t
-                    .evidence
-                    .first()
-                    .map(|e| format!("`{}`", clip(&evidence_text(e), 120).replace('`', "'")))
-                    .unwrap_or_default(),
-            };
-            let _ = writeln!(
-                out,
-                "| {name} | {} | {} | {} |",
-                escape(t.version.as_deref().unwrap_or("")),
-                escape(&t.categories.join(", ")),
-                evidence.replace('|', "\\|")
-            );
-        }
-        out.push('\n');
+    if let Some(stack) = m.stack.data.as_ref() {
+        let view = stackview::view(&stack.technologies, false);
+        technology_table(&mut out, "Technologies", "Technology", &view.stack);
+        technology_table(&mut out, "Services", "Service", &view.services);
     }
 
     if let Some(sec) = m.security.data.as_ref().filter(|s| s.grade.is_some()) {
@@ -159,6 +139,40 @@ fn bold_grade(text: &str) -> String {
     }
 }
 
+/// One table of technologies: what the site is built with, or the services
+/// that only DNS shows. Nothing is written for an empty list.
+fn technology_table(out: &mut String, title: &str, column: &str, technologies: &[&Technology]) {
+    if technologies.is_empty() {
+        return;
+    }
+    let _ = write!(
+        out,
+        "## {title}\n\n| {column} | Version | Category | Detected from |\n| --- | --- | --- | --- |\n"
+    );
+    for t in technologies {
+        let mut name = escape(&t.name);
+        if t.confidence < 100 {
+            name.push_str(&format!(" (probable, {}%)", t.confidence));
+        }
+        let evidence = match &t.implied_by {
+            Some(by) => format!("implied by {}", escape(by)),
+            None => t
+                .evidence
+                .first()
+                .map(|e| format!("`{}`", clip(&evidence_text(e), 120).replace('`', "'")))
+                .unwrap_or_default(),
+        };
+        let _ = writeln!(
+            out,
+            "| {name} | {} | {} | {} |",
+            escape(t.version.as_deref().unwrap_or("")),
+            escape(&t.categories.join(", ")),
+            evidence.replace('|', "\\|")
+        );
+    }
+    out.push('\n');
+}
+
 fn capitalize(word: &str) -> String {
     let mut chars = word.chars();
     chars
@@ -176,6 +190,30 @@ mod tests {
         let text = render(&crate::render::tests::hostile_report());
         assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
         assert!(text.contains('\u{fffd}'), "{text:?}");
+    }
+
+    #[test]
+    fn stack_and_services_are_separate_tables() {
+        use crate::stackview::tests::tech;
+        use insite_core::detect::TechOrigin;
+        let report = crate::render::tests::report_with(vec![
+            tech("Zoom", 10, TechOrigin::Dns),
+            tech("HSTS", 9, TechOrigin::Page),
+            tech("React", 8, TechOrigin::Page),
+            tech("WordPress", 1, TechOrigin::Page),
+            tech("DigiCert", 9, TechOrigin::Certificate),
+        ]);
+        let text = render(&report);
+        assert!(text.contains("| Stack | WordPress · React |"), "{text}");
+        assert!(text.contains("| Services | Zoom |"), "{text}");
+        let technologies = text.split("## Technologies").nth(1).unwrap();
+        let (technologies, services) = technologies.split_once("## Services").unwrap();
+        assert!(technologies.find("WordPress").unwrap() < technologies.find("React").unwrap());
+        assert!(!technologies.contains("HSTS") && !technologies.contains("Zoom"));
+        assert!(
+            services.contains("Zoom") && !services.contains("DigiCert"),
+            "{services}"
+        );
     }
 
     #[test]

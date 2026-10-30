@@ -7,6 +7,7 @@ use insite_core::analyze::dns::DomainReport;
 use insite_core::analyze::network::{HttpsEnforcement, Network};
 use insite_core::report::{Finding, Module, Outcome, Report, Severity, Status, format_bytes};
 
+use crate::stackview;
 use crate::style::{Style, neutralize, wrap_items};
 
 /// Width of the section labels on the first screen.
@@ -36,7 +37,7 @@ fn terminal_text(report: &Report, color: bool, verbose: bool, width: usize) -> S
     }
     out.push('\n');
 
-    for (label, text) in summary_lines(report, &s, width) {
+    for (label, text) in summary_lines(report, &s, width, verbose) {
         let _ = writeln!(out, "{}{}", s.bold(&format!("{label:<LABEL$}")), text);
     }
 
@@ -105,24 +106,14 @@ fn terminal_text(report: &Report, color: bool, verbose: bool, width: usize) -> S
 }
 
 /// The first screen's sections: label and one line of text each.
-pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static str, String)> {
+pub fn summary_lines(report: &Report, s: &Style, width: usize, verbose: bool) -> Vec<(&'static str, String)> {
     let m = &report.modules;
     let mut lines = Vec::new();
     if let Some(text) = summary(&m.stack, s, |stack| {
-        let names: Vec<String> = stack
-            .technologies
-            .iter()
-            .map(|t| {
-                let mut name = t.name.clone();
-                if let Some(v) = &t.version {
-                    name = format!("{name} {v}");
-                }
-                if t.confidence < 100 {
-                    s.dim(&format!("{name}?"))
-                } else {
-                    name
-                }
-            })
+        let names: Vec<String> = stackview::view(&stack.technologies, verbose)
+            .stack
+            .into_iter()
+            .map(|t| stackview::label(t, s))
             .collect();
         if names.is_empty() {
             s.dim("nothing recognized")
@@ -131,6 +122,13 @@ pub fn summary_lines(report: &Report, s: &Style, width: usize) -> Vec<(&'static 
         }
     }) {
         lines.push(("stack", text));
+    }
+    if let Some(stack) = m.stack.data.as_ref() {
+        let view = stackview::view(&stack.technologies, verbose);
+        if !view.services.is_empty() {
+            let names = stackview::services_names(&view.services, s, verbose);
+            lines.push(("services", wrap_items(&names, " · ", width, LABEL)));
+        }
     }
     if let Some(text) = summary(&m.security, s, |sec| match (sec.grade, sec.score) {
         (Some(grade), Some(score)) => {
@@ -288,7 +286,7 @@ pub fn browser_update(report: &Report, color: bool, verbose: bool, width: usize)
 fn browser_update_text(report: &Report, color: bool, verbose: bool, width: usize) -> String {
     let s = Style::new(color);
     let mut out = String::from("\n");
-    for (label, text) in summary_lines(report, &s, width) {
+    for (label, text) in summary_lines(report, &s, width, verbose) {
         if label == "browser" || label == "stack" {
             let _ = writeln!(out, "{}{}", s.bold(&format!("{label:<LABEL$}")), text);
         }
@@ -379,7 +377,11 @@ fn browser_details(out: &mut String, report: &Report, s: &Style, width: usize) {
         row(out, "console", c);
     }
     if let Some(r) = report.modules.stack.data.as_ref().and_then(|st| st.rendered.as_ref()) {
-        let names: Vec<String> = r.technologies.iter().map(|t| t.name.clone()).collect();
+        let names: Vec<String> = stackview::view(&r.technologies, true)
+            .stack
+            .iter()
+            .map(|t| t.name.clone())
+            .collect();
         row(out, "stack", &format!("{} → {}", r.url, names.join(", ")));
     }
 }
@@ -765,7 +767,7 @@ fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
                 out,
                 "  {name}{}  {}",
                 s.yellow(&confidence),
-                s.dim(&t.categories.join(", "))
+                s.dim(&format!("{} · {}", t.categories.join(", "), t.origin.as_str()))
             );
             let evidence: Vec<String> = match &t.implied_by {
                 Some(by) => vec![format!("implied by {by}")],
@@ -989,6 +991,8 @@ pub fn severity(s: Severity) -> &'static str {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use insite_core::analyze::stack::Stack;
+    use insite_core::detect::{TechOrigin, Technology};
     use insite_core::report::{Modules, TargetInfo};
     use std::collections::BTreeMap;
 
@@ -1059,6 +1063,94 @@ pub(crate) mod tests {
         let plain = terminal(&report, false, true, 80);
         assert!(!plain.contains('\x1b'), "{plain:?}");
         assert!(plain.contains("example.com\u{fffd}[2J"), "{plain:?}");
+    }
+
+    /// A report whose stack module holds `technologies`.
+    pub(crate) fn report_with(technologies: Vec<Technology>) -> Report {
+        let mut report = hostile_report();
+        report.modules.stack = Module {
+            status: Status::Ok,
+            reason: None,
+            data: Some(Stack {
+                technologies,
+                signatures: "test".to_owned(),
+                rendered: None,
+            }),
+            findings: Vec::new(),
+        };
+        report
+    }
+
+    fn line<'a>(text: &'a str, label: &str) -> Option<&'a str> {
+        text.lines()
+            .find(|l| l.starts_with(label))
+            .map(|l| l[LABEL..].trim_end())
+    }
+
+    #[test]
+    fn stack_and_services_are_separate_lines_in_order_of_importance() {
+        use crate::stackview::tests::tech;
+        let report = report_with(vec![
+            tech("Zoom", 10, TechOrigin::Dns),
+            tech("Open Graph", 10, TechOrigin::Page),
+            tech("React", 8, TechOrigin::Page),
+            tech("HSTS", 9, TechOrigin::Page),
+            tech("WordPress", 1, TechOrigin::Page),
+            tech("DigiCert", 9, TechOrigin::Certificate),
+            tech("Microsoft 365", 2, TechOrigin::Dns),
+        ]);
+        let text = terminal(&report, false, false, 100);
+        assert_eq!(line(&text, "stack"), Some("WordPress · React"), "{text}");
+        assert_eq!(line(&text, "services"), Some("Microsoft 365 · Zoom"), "{text}");
+        let lines: Vec<&str> = text.lines().collect();
+        let stack = lines.iter().position(|l| l.starts_with("stack")).unwrap();
+        assert!(lines[stack + 1].starts_with("services"), "services right after stack");
+        // -v opens everything: markers in the stack, the issuer among the services.
+        let verbose = terminal(&report, false, true, 100);
+        assert_eq!(
+            line(&verbose, "stack"),
+            Some("WordPress · React · HSTS · Open Graph"),
+            "{verbose}"
+        );
+        assert_eq!(
+            line(&verbose, "services"),
+            Some("Microsoft 365 · DigiCert · Zoom"),
+            "{verbose}"
+        );
+        assert!(
+            verbose.contains("  DigiCert  ") && verbose.contains("certificate"),
+            "{verbose}"
+        );
+    }
+
+    #[test]
+    fn services_stop_at_six_names_unless_verbose() {
+        use crate::stackview::tests::tech;
+        let many: Vec<Technology> = (0..9)
+            .map(|i| tech(&format!("Service{i}"), 9, TechOrigin::Dns))
+            .collect();
+        let report = report_with(many);
+        let text = terminal(&report, false, false, 200);
+        assert_eq!(
+            line(&text, "services"),
+            Some("Service0 · Service1 · Service2 · Service3 · Service4 · Service5 · +3"),
+            "{text}"
+        );
+        let verbose = terminal(&report, false, true, 200);
+        let all = line(&verbose, "services").unwrap();
+        assert!(all.ends_with("Service8") && !all.contains('+'), "{all}");
+    }
+
+    #[test]
+    fn no_services_line_when_there_are_none() {
+        use crate::stackview::tests::tech;
+        let report = report_with(vec![
+            tech("React", 8, TechOrigin::Page),
+            tech("DigiCert", 9, TechOrigin::Certificate),
+        ]);
+        let text = terminal(&report, false, false, 100);
+        assert!(line(&text, "stack").is_some());
+        assert!(line(&text, "services").is_none(), "{text}");
     }
 
     #[test]

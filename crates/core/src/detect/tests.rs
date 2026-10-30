@@ -234,14 +234,21 @@ fn an_implied_technology_inherits_the_origin_of_its_implier() {
     });
     assert_eq!(
         origins(&dns_only),
-        [("Mailer".to_owned(), TechOrigin::Dns), ("Mail API".to_owned(), TechOrigin::Dns)]
+        [
+            ("Mailer".to_owned(), TechOrigin::Dns),
+            ("Mail API".to_owned(), TechOrigin::Dns)
+        ]
     );
     // Implied through a chain: dns all the way down.
     let chain = engine.detect(&Inputs {
         dns: vec![("TXT".into(), "chain-record".into())],
         ..Default::default()
     });
-    assert!(chain.iter().all(|t| t.origin == TechOrigin::Dns), "{:?}", origins(&chain));
+    assert!(
+        chain.iter().all(|t| t.origin == TechOrigin::Dns),
+        "{:?}",
+        origins(&chain)
+    );
     assert_eq!(chain.len(), 3);
 }
 

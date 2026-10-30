@@ -3,6 +3,7 @@ mod markdown;
 mod render;
 mod run;
 mod snapshots;
+mod stackview;
 mod style;
 mod update;
 

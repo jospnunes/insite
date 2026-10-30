@@ -24,8 +24,8 @@ wordpress.org → https://wordpress.org/  200  HTTP/2  381 ms
   tcp 5.3 · tls 75 · ttfb 37 · download 12
   HTTPS enforced
 
-stack     WordPress 7.2 · WordPress Block Editor · Gutenberg 24.3.0 · MySQL · PHP · Nginx
-          Google Font API · Google Tag Manager · HSTS · Let's Encrypt · Open Graph · RSS
+stack     WordPress 7.2 · WordPress Block Editor · WordPress Site Editor · Gutenberg 24.3.0 · MySQL
+          PHP · Nginx · Google Font API · Google Tag Manager
 security  C   score 55 · 4 issues
 tls       Let's Encrypt · TLS 1.3 · expires in 54 days
 seo       indexable
@@ -60,7 +60,7 @@ weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party in the 
 | dns | A/AAAA/CNAME/NS/MX/CAA, DNSSEC, SPF (includes walked, 10-lookup limit), DMARC, DKIM selectors, MTA-STS, TLS-RPT, BIMI |
 | infra | AS and owner, hosting, CDN, server, bot challenges |
 | security | A+ to F grade with the [MDN HTTP Observatory](https://github.com/mdn/mdn-http-observatory) scoring, plus mixed content, insecure forms, version leaks, downgrades, security.txt |
-| stack | ~7,600 technologies from the [webappanalyzer](https://github.com/enthec/webappanalyzer) signatures, each with the evidence behind it; libraries with a known vulnerable version are flagged using [Retire.js](https://github.com/RetireJS/retire.js) data |
+| stack | ~7,600 technologies from the [webappanalyzer](https://github.com/enthec/webappanalyzer) signatures, each with the evidence behind it and where it was seen (page, DNS or certificate); the terminal shows the page ones as `stack` and the DNS ones as `services`; libraries with a known vulnerable version are flagged using [Retire.js](https://github.com/RetireJS/retire.js) data |
 | seo | indexability, title, description, canonical, headings, language, Open Graph, structured data, robots.txt, sitemap |
 | weight | HTML size and compression, scripts, render-blocking resources, images, third parties by name |
 | browser | with `--browser`: LCP, CLS, TBT and FCP rated, requests and bytes by type, heaviest resources, third-party share, console errors |
