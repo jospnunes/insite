@@ -102,7 +102,7 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Infra> {
             _ => asn.map(|a| a.ip.to_string()),
         },
         asn: as_number,
-        as_name: asn.and_then(|a| a.name.clone()),
+        as_name: asn.and_then(|a| a.name.as_deref()).and_then(clean_as_name),
         prefix: asn.and_then(|a| a.prefix.clone()),
         country: asn.and_then(|a| a.country.clone()),
         hosting: as_number.and_then(|n| {
@@ -180,6 +180,24 @@ fn describe(signal: &Signal, hop: &Hop) -> String {
         parts.push(format!("page contains `{marker}`"));
     }
     parts.join(", ")
+}
+
+/// Some registries put the number in the name itself (`AS28604 - Globo Comunicacao`),
+/// and the number is already a field of its own, so drop that prefix.
+fn clean_as_name(name: &str) -> Option<String> {
+    let name = name.trim();
+    let stripped = match (name.get(..2), name.get(2..)) {
+        (Some(prefix), Some(rest)) if prefix.eq_ignore_ascii_case("as") => {
+            let after_digits = rest.trim_start_matches(|c: char| c.is_ascii_digit());
+            if after_digits.len() < rest.len() {
+                after_digits.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, '-' | ':' | ','))
+            } else {
+                name
+            }
+        }
+        _ => name,
+    };
+    (!stripped.is_empty()).then(|| stripped.to_owned())
 }
 
 #[cfg(test)]
@@ -269,5 +287,36 @@ pub(crate) mod tests {
         assert!(challenge(&ok).is_none());
         let blocked = snapshot_with(403, &[("server", "cloudflare")], page);
         assert_eq!(challenge(&blocked).unwrap().name, "Cloudflare");
+    }
+
+    #[test]
+    fn as_name_loses_its_own_number() {
+        assert_eq!(
+            clean_as_name("AS28604 - Globo Comunicacao e Participacoes SA").as_deref(),
+            Some("Globo Comunicacao e Participacoes SA")
+        );
+        assert_eq!(clean_as_name("AS13335 Cloudflare").as_deref(), Some("Cloudflare"));
+        assert_eq!(clean_as_name("as64500: Example").as_deref(), Some("Example"));
+        assert_eq!(clean_as_name("CLOUDFLARENET, US").as_deref(), Some("CLOUDFLARENET, US"));
+        // Not a number prefix: names that merely start with "as".
+        assert_eq!(clean_as_name("ASSOCIATION NET").as_deref(), Some("ASSOCIATION NET"));
+        assert_eq!(clean_as_name("AS28604"), None);
+        assert_eq!(clean_as_name("é"), Some("é".to_owned()));
+    }
+
+    #[test]
+    fn analysis_reports_the_as_name_without_the_number() {
+        let mut snap = snapshot_with(200, &[], "");
+        snap.asn = Some(crate::snapshot::AsnLookup {
+            ip: "186.192.83.15".parse().unwrap(),
+            asn: Some(28604),
+            prefix: None,
+            country: Some("BR".into()),
+            name: Some("AS28604 - Globo Comunicacao e Participacoes SA".into()),
+            error: None,
+        });
+        let infra = analyze(&snap).data.unwrap();
+        assert_eq!(infra.asn, Some(28604));
+        assert_eq!(infra.as_name.as_deref(), Some("Globo Comunicacao e Participacoes SA"));
     }
 }
