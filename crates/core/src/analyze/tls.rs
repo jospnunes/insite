@@ -7,6 +7,7 @@ use url::{Host, Url};
 use x509_parser::extensions::{GeneralName, ParsedExtension};
 use x509_parser::prelude::{X509Certificate, X509Name, parse_x509_certificate};
 use x509_parser::public_key::PublicKey;
+use x509_parser::x509::SubjectPublicKeyInfo;
 
 use super::network::opener;
 use super::rfc3339;
@@ -415,10 +416,33 @@ pub fn covers(names: &[String], host: &Host<String>) -> bool {
     }
 }
 
+/// Bits of an elliptic-curve key. The curve is named in the parameters; the size
+/// of the point alone is wrong for P-521 (528).
+fn ec_bits(spki: &SubjectPublicKeyInfo) -> usize {
+    let named = spki
+        .algorithm
+        .parameters
+        .as_ref()
+        .and_then(|p| p.as_oid().ok())
+        .map(|oid| oid.to_id_string());
+    match named.as_deref() {
+        Some("1.3.132.0.33") => 224,
+        Some("1.2.840.10045.3.1.7" | "1.3.132.0.10") => 256,
+        Some("1.3.132.0.34") => 384,
+        Some("1.3.132.0.35") => 521,
+        _ => match spki.parsed() {
+            // The point of a P-521 key is 66 bytes per coordinate.
+            Ok(PublicKey::EC(ec)) if ec.key_size() == 528 => 521,
+            Ok(PublicKey::EC(ec)) => ec.key_size(),
+            _ => 0,
+        },
+    }
+}
+
 fn key_description(cert: &X509Certificate) -> String {
     match cert.public_key().parsed() {
         Ok(PublicKey::RSA(rsa)) => format!("RSA {}", rsa.key_size()),
-        Ok(PublicKey::EC(ec)) => format!("ECDSA P-{}", ec.key_size()),
+        Ok(PublicKey::EC(_)) => format!("ECDSA P-{}", ec_bits(cert.public_key())),
         _ if cert.public_key().algorithm.algorithm.to_id_string() == "1.3.101.112" => "Ed25519".into(),
         _ => "unknown".into(),
     }
@@ -427,7 +451,7 @@ fn key_description(cert: &X509Certificate) -> String {
 fn weak_key(cert: &X509Certificate) -> Option<(&'static str, usize)> {
     match cert.public_key().parsed() {
         Ok(PublicKey::RSA(rsa)) if rsa.key_size() < 2048 => Some(("RSA", rsa.key_size())),
-        Ok(PublicKey::EC(ec)) if ec.key_size() < 256 => Some(("ECDSA", ec.key_size())),
+        Ok(PublicKey::EC(_)) if ec_bits(cert.public_key()) < 256 => Some(("ECDSA", ec_bits(cert.public_key()))),
         _ => None,
     }
 }
@@ -591,6 +615,7 @@ mod tests {
         let cert = data.certificate.unwrap();
         assert_eq!((cert.days_remaining, cert.lifetime_days), (33, 91));
         assert!(cert.covers_host);
+        assert_eq!(cert.key, "ECDSA P-256");
         assert_eq!(cert.not_after, "2026-12-01T00:00:00.000Z");
     }
 
@@ -764,6 +789,20 @@ mod tests {
         let intermediate = relabel_sha1(&leaf(&["ca.example"], (2026, 9, 1), (2026, 12, 1), vec![2; 20]));
         let (_, f) = examine(&tls_info(vec![der, intermediate], valid()), &host("example.com"), NOW);
         assert_eq!(ids(&f), ["tls.cert.sha1"]);
+    }
+
+    #[test]
+    fn p521_keys_are_named_p521() {
+        use x509_parser::prelude::FromDer;
+        use x509_parser::x509::SubjectPublicKeyInfo;
+        // id-ecPublicKey, secp521r1, an uncompressed point of 132 bytes.
+        let mut spki = vec![
+            0x30, 0x81, 0x9b, 0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01,
+        ];
+        spki.extend([0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23, 0x03, 0x81, 0x86, 0x00, 0x04]);
+        spki.extend(std::iter::repeat_n(0x11, 132));
+        let (_, info) = SubjectPublicKeyInfo::from_der(&spki).unwrap();
+        assert_eq!(ec_bits(&info), 521);
     }
 
     #[test]
