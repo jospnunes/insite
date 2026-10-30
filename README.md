@@ -58,14 +58,26 @@ cross-origin request, which insite does not send.
 
 ## Install
 
-From source, with Rust 1.89 or newer:
+Linux and macOS (on Linux with a glibc older than 2.35, the installer picks
+the static musl build):
+
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jospnunes/insite/releases/latest/download/insite-installer.sh | sh
+```
+
+Windows (PowerShell):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/jospnunes/insite/releases/latest/download/insite-installer.ps1 | iex"
+```
+
+The archives for each platform are on the
+[releases page](https://github.com/jospnunes/insite/releases). From source,
+with Rust 1.89 or newer:
 
 ```bash
 cargo install --path crates/cli
 ```
-
-Release binaries for Linux, macOS and Windows are built by
-`.github/workflows/release.yml` on each tag.
 
 ## Usage
 
