@@ -757,6 +757,10 @@ fn cookies_test(input: &Inputs, hsts: bool) -> TestResult {
     }
     let mut missing_same_site = false;
     for c in &jar {
+        // Upstream skips Heroku's session affinity cookie altogether.
+        if c.name == "heroku-session-affinity" {
+            continue;
+        }
         let lower = c.name.to_ascii_lowercase();
         let session = lower.contains("login") || lower.contains("sess");
         if !c.secure && c.same_site.as_deref() == Some("none") {
@@ -932,15 +936,36 @@ fn hsts_test(input: &Inputs) -> TestResult {
     let max_age = (!value.contains(',')).then(|| {
         value.split(';').map(|d| d.trim().to_ascii_lowercase()).find_map(|d| {
             let v = d.strip_prefix("max-age=")?.to_owned();
-            v.trim_matches('"').parse::<u64>().ok()
+            Some(js_parse_int(v.trim_matches('"')))
         })
     });
     let result = match max_age.flatten() {
         None => "hsts-header-invalid",
-        Some(age) if age >= SIX_MONTHS => "hsts-implemented-max-age-at-least-six-months",
-        Some(_) => "hsts-implemented-max-age-less-than-six-months",
+        // Upstream quirk: `parseInt` gives NaN for `max-age=abc` or an empty value, NaN is
+        // not null and `NaN < 15552000` is false, so the Observatory scores it as "at
+        // least six months". Reproduced on purpose.
+        Some(None) => "hsts-implemented-max-age-at-least-six-months",
+        Some(Some(age)) if age >= i128::from(SIX_MONTHS) => "hsts-implemented-max-age-at-least-six-months",
+        Some(Some(_)) => "hsts-implemented-max-age-less-than-six-months",
     };
     test(NAME, result, value)
+}
+
+/// JavaScript `parseInt(s, 10)`: optional sign and the leading digits, ignoring whatever
+/// follows. `None` stands for NaN (no digits). Huge values saturate.
+fn js_parse_int(s: &str) -> Option<i128> {
+    let s = s.trim_start();
+    let (negative, rest) = match s.strip_prefix('-') {
+        Some(r) => (true, r),
+        None => (false, s.strip_prefix('+').unwrap_or(s)),
+    };
+    let digits = rest.bytes().take_while(u8::is_ascii_digit);
+    let mut value: Option<i128> = None;
+    for d in digits {
+        let v = value.unwrap_or(0).saturating_mul(10).saturating_add(i128::from(d - b'0'));
+        value = Some(v);
+    }
+    value.map(|v| if negative { -v } else { v })
 }
 
 fn sri_test(input: &Inputs) -> TestResult {
