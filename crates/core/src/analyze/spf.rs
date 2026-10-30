@@ -1,8 +1,6 @@
 //! SPF (RFC 7208) parsing and DNS lookup counting. Used by the collection, to know
 //! which includes to fetch, and by the analysis.
 
-use std::collections::HashSet;
-
 /// Mechanisms and modifiers that cost a DNS lookup count against this limit.
 pub const LOOKUP_LIMIT: usize = 10;
 
@@ -35,7 +33,11 @@ pub fn records(txt: &[String]) -> Vec<&str> {
         .map(String::as_str)
         .filter(|t| {
             let t = t.trim_start();
-            t.len() >= 6 && t[..6].eq_ignore_ascii_case("v=spf1") && t[6..].chars().next().is_none_or(|c| c == ' ')
+            // `get` returns None off a char boundary (TXT is decoded lossily, so it can hold
+            // multi-byte characters anywhere) instead of panicking like slicing would.
+            t.get(..6).is_some_and(|head| head.eq_ignore_ascii_case("v=spf1"))
+                && t.get(6..)
+                    .is_some_and(|rest| rest.chars().next().is_none_or(|c| c == ' '))
         })
         .collect()
 }
@@ -87,8 +89,8 @@ pub struct Walk {
 /// `None` when it was not made or failed.
 pub fn walk<'a>(domain: &str, txt: &dyn Fn(&str) -> Option<&'a [String]>) -> Walk {
     let mut walk = Walk::default();
-    let mut visited = HashSet::new();
-    visit(domain, txt, &mut walk, &mut visited, 0);
+    let mut path = Vec::new();
+    visit(domain, txt, &mut walk, &mut path, 0);
     walk
 }
 
@@ -96,23 +98,28 @@ fn visit<'a>(
     domain: &str,
     txt: &dyn Fn(&str) -> Option<&'a [String]>,
     walk: &mut Walk,
-    visited: &mut HashSet<String>,
+    path: &mut Vec<String>,
     depth: usize,
 ) {
-    if depth > LOOKUP_LIMIT || walk.lookups > LOOKUP_LIMIT || !visited.insert(domain.to_owned()) {
+    // Loop protection is per path (the ancestors being evaluated), not global: RFC 7208
+    // counts every evaluation, so a domain included from two places costs twice.
+    if depth > LOOKUP_LIMIT || walk.lookups > LOOKUP_LIMIT || path.iter().any(|d| d == domain) {
         return;
     }
     let Some(records) = txt(domain) else {
-        walk.unknown.push(domain.to_owned());
+        if !walk.unknown.iter().any(|d| d == domain) {
+            walk.unknown.push(domain.to_owned());
+        }
         return;
     };
     let spf = self::records(records);
     let Some(record) = spf.first() else {
-        if depth > 0 {
+        if depth > 0 && !walk.broken.iter().any(|d| d == domain) {
             walk.broken.push(domain.to_owned());
         }
         return;
     };
+    path.push(domain.to_owned());
     let terms = parse(record);
     let has_all = terms.iter().any(|t| matches!(t, Term::All(_)));
     for term in &terms {
@@ -129,12 +136,13 @@ fn visit<'a>(
                 if target.contains('%') {
                     walk.has_macros = true;
                 } else {
-                    visit(target, txt, walk, visited, depth + 1);
+                    visit(target, txt, walk, path, depth + 1);
                 }
             }
             _ => {}
         }
     }
+    path.pop();
 }
 
 /// Targets the collection should fetch next, given what is known so far.
@@ -214,6 +222,44 @@ mod tests {
         let lookup = |d: &str| z.get(d).map(Vec::as_slice);
         assert!(pending_targets("example.com", &lookup).is_empty());
         assert_eq!(walk("example.com", &lookup).lookups, 11);
+    }
+
+    #[test]
+    fn records_do_not_panic_on_non_char_boundaries() {
+        let txt = vec![
+            "v=spf\u{20ac} include:x".to_string(),
+            "v=sp\u{fffd}1 -all".to_string(),
+            "\u{fffd}\u{fffd}\u{fffd}".to_string(),
+            "v=spf1 -all".to_string(),
+        ];
+        assert_eq!(records(&txt), ["v=spf1 -all"]);
+    }
+
+    #[test]
+    fn a_domain_included_twice_counts_its_lookups_twice() {
+        let z = zone(&[
+            ("example.com", "v=spf1 a include:one.example include:two.example -all"),
+            ("one.example", "v=spf1 include:shared.example -all"),
+            ("two.example", "v=spf1 include:shared.example -all"),
+            ("shared.example", "v=spf1 a mx a mx -all"),
+        ]);
+        let lookup = |d: &str| z.get(d).map(Vec::as_slice);
+        // a, include one, include shared, 4 in shared, include two, include shared, 4 in shared
+        assert_eq!(walk("example.com", &lookup).lookups, 13);
+    }
+
+    #[test]
+    fn unknown_and_broken_targets_are_listed_once() {
+        let z = zone(&[
+            ("example.com", "v=spf1 include:one.example include:two.example -all"),
+            ("one.example", "v=spf1 include:shared.example include:gone.example -all"),
+            ("two.example", "v=spf1 include:shared.example include:gone.example -all"),
+            ("gone.example", "text"),
+        ]);
+        let lookup = |d: &str| z.get(d).map(Vec::as_slice);
+        let w = walk("example.com", &lookup);
+        assert_eq!(w.unknown, ["shared.example"]);
+        assert_eq!(w.broken, ["gone.example"]);
     }
 
     #[test]
