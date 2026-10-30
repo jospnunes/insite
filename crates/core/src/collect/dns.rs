@@ -347,7 +347,7 @@ struct LookupError {
 fn is_public(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
-            let [a, b, ..] = v4.octets();
+            let [a, b, c, _] = v4.octets();
             !(v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
@@ -357,18 +357,25 @@ fn is_public(ip: IpAddr) -> bool {
                 || v4.is_multicast()
                 || a == 0
                 || a >= 240
-                || (a == 100 && (64..128).contains(&b)))
+                || (a == 100 && (64..128).contains(&b))
+                // Benchmarking (198.18.0.0/15) and the IETF protocol block (192.0.0.0/24).
+                || (a == 198 && (18..20).contains(&b))
+                || (a == 192 && b == 0 && c == 0))
         }
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => is_public(IpAddr::V4(v4)),
             None => {
-                let first = v6.segments()[0];
+                let [first, second, third, fourth, fifth, sixth, ..] = v6.segments();
                 !(v6.is_loopback()
                     || v6.is_unspecified()
                     || v6.is_multicast()
                     || first & 0xfe00 == 0xfc00
                     || first & 0xffc0 == 0xfe80
-                    || first == 0x2001 && v6.segments()[1] == 0x0db8)
+                    || first == 0x2001 && second == 0x0db8
+                    // NAT64 (64:ff9b::/96) and 6to4 (2002::/16) embed IPv4 addresses
+                    // that may be private.
+                    || (first == 0x64 && second == 0xff9b && [third, fourth, fifth, sixth] == [0; 4])
+                    || first == 0x2002)
             }
         },
     }
@@ -439,5 +446,27 @@ fn take(r: Result<Vec<IpAddr>, LookupError>, into: &mut Vec<IpAddr>, errors: &mu
         }),
         Ok(addrs) => into.extend(addrs),
         Err(e) => errors.push(e),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_purpose_ranges_are_not_public() {
+        for ip in [
+            "198.18.0.1",
+            "198.19.255.254",
+            "192.0.0.8",
+            "64:ff9b::7f00:1",
+            "64:ff9b::c0a8:1",
+            "2002:c0a8:101::1",
+        ] {
+            assert!(!is_public(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["198.20.0.1", "192.0.1.1", "8.8.8.8", "2001:4860:4860::8888", "2003::1"] {
+            assert!(is_public(ip.parse().unwrap()), "{ip}");
+        }
     }
 }
