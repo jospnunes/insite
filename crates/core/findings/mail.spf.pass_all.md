@@ -1,5 +1,5 @@
 severity: critical
-title: SPF authorizes the whole internet
+title: SPF of {domain} authorizes the whole internet
 ---
 The SPF record of {domain} ends in `+all`, which tells receivers that any server in the world may send mail as {domain}.
 

@@ -1,5 +1,5 @@
 severity: low
-title: DMARC only monitors (p=none)
+title: DMARC of {domain} only monitors (p=none)
 ---
 The DMARC policy of {domain} is `p=none`: receivers report failures but still deliver forged mail.
 

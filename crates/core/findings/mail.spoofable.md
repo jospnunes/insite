@@ -1,5 +1,5 @@
 severity: low
-title: Domain open to e-mail spoofing
+title: {domain} is open to e-mail spoofing
 ---
 {domain} receives no mail and publishes neither SPF nor DMARC, so receivers have no way to reject mail that falsely claims to come from it.
 

@@ -1,5 +1,5 @@
 severity: high
-title: {count} SPF records
+title: {count} SPF records on {domain}
 ---
 {domain} has {count} SPF records. The standard requires exactly one; with more, receivers treat SPF as a permanent error and ignore it.
 

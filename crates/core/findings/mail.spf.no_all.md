@@ -1,5 +1,5 @@
 severity: low
-title: SPF record without an ending policy
+title: SPF of {domain} has no ending policy
 ---
 The SPF record of {domain} has no `all` mechanism, so mail from servers it does not list gets a neutral result instead of failing.
 

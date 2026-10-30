@@ -1,5 +1,5 @@
 severity: medium
-title: SPF includes {target}, which has no SPF record
+title: SPF of {domain} includes {target}, which has no SPF record
 ---
 The SPF record of {domain} includes {target}, but that name has no SPF record. Receivers treat this as a permanent error.
 

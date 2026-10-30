@@ -1,5 +1,5 @@
 severity: medium
-title: Invalid DMARC record
+title: Invalid DMARC record for {domain}
 ---
 The DMARC record of {domain} is not usable: {reason}.
 

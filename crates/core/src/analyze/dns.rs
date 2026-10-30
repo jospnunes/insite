@@ -114,6 +114,9 @@ pub fn analyze(snapshot: &Snapshot) -> Module<Dns> {
             domains.push(domain(records, &mut findings));
         }
     }
+    // The same problem on the same domain is one finding, however it was reached.
+    let mut seen = std::collections::HashSet::new();
+    findings.retain(|f| seen.insert((f.id, f.params.clone())));
     if domains.iter().any(|d| !d.failed_queries.is_empty()) {
         reasons.push("some DNS queries failed, so their records are unknown".into());
     }
@@ -691,5 +694,59 @@ mod tests {
             &["abby.ns.cloudflare.com", "a.auto.dns.br"],
         )]);
         assert_eq!(domain(&rec, &mut Vec::new()).dns_provider, None);
+    }
+
+    fn two_domain_snapshot() -> Snapshot {
+        let mut snapshot = crate::analyze::infra::tests::snapshot_with(200, &[], "");
+        let records = |role, host: &str, registrable: &str| DomainRecords {
+            role,
+            host: host.into(),
+            registrable: registrable.into(),
+            answers: vec![
+                answer(registrable, "MX", &["10 mx.example.net"]),
+                answer(registrable, "TXT", &["v=spf1 -all", "v=spf1 ~all"]),
+                answer(&format!("_dmarc.{registrable}"), "TXT", &["v=DMARC1; p=none"]),
+            ],
+        };
+        snapshot.dns = vec![
+            records(DomainRole::Input, "rockcontent.com", "rockcontent.com"),
+            records(DomainRole::Final, "analoghq.ai", "analoghq.ai"),
+        ];
+        snapshot
+    }
+
+    #[test]
+    fn titles_name_the_domain_they_are_about() {
+        let module = analyze(&two_domain_snapshot());
+        let titles: Vec<(&str, &str)> = module.findings.iter().map(|f| (f.id, f.title.as_str())).collect();
+        for id in ["mail.spf.multiple", "mail.dmarc.none"] {
+            for domain in ["rockcontent.com", "analoghq.ai"] {
+                assert!(
+                    titles.iter().any(|(i, t)| *i == id && t.contains(domain)),
+                    "{id} must name {domain}: {titles:?}"
+                );
+            }
+        }
+        for f in &module.findings {
+            assert!(
+                f.title.contains(&f.params["domain"]),
+                "`{}` does not name its domain: {}",
+                f.id,
+                f.title
+            );
+        }
+    }
+
+    #[test]
+    fn the_same_finding_for_the_same_domain_appears_once() {
+        let mut snapshot = two_domain_snapshot();
+        snapshot.dns.push(snapshot.dns[0].clone());
+        let module = analyze(&snapshot);
+        let mut keys: Vec<_> = module.findings.iter().map(|f| (f.id, f.params.clone())).collect();
+        let total = keys.len();
+        keys.sort();
+        keys.dedup();
+        assert_eq!(keys.len(), total);
+        assert_eq!(module.findings.iter().filter(|f| f.id == "mail.dmarc.none").count(), 2);
     }
 }
