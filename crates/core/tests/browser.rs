@@ -146,3 +146,53 @@ async fn a_navigation_error_is_reported_not_raised() {
         data.error
     );
 }
+
+fn plain_visit() -> Visit {
+    Visit {
+        mobile: false,
+        throttle: false,
+        user_agent_suffix: None,
+        accept_language: "en".into(),
+        js_paths: Vec::new(),
+        dom_properties: Vec::new(),
+    }
+}
+
+/// `alert()` and `confirm()` block the renderer until someone answers them.
+#[tokio::test]
+async fn javascript_dialogs_do_not_block_the_visit() {
+    if !chrome() {
+        return;
+    }
+    const DIALOGS: &str = r#"<!doctype html><html><head><title>t</title></head><body><h1>oi</h1><script>
+alert('hello');
+confirm('sure?');
+addEventListener('load', () => setTimeout(() => alert('late'), 300));
+</script></body></html>"#;
+    let server = Server::start(TlsMode::Plain, 0, |_| async move { ok(DIALOGS) }).await;
+    let deadline = Deadline::new(tokio::time::Instant::now() + Duration::from_secs(30), None);
+    let mut browser = Browser::launch(None, &deadline).await.expect("the browser starts");
+    let started = std::time::Instant::now();
+    let data = browser
+        .visit(&format!("http://{}/", server.addr), &plain_visit(), &deadline)
+        .await;
+    browser.close().await;
+    assert_eq!(data.error, None);
+    assert!(data.metrics.is_some(), "no metrics after a dialog");
+    assert!(data.html.is_some_and(|h| h.contains("<h1>oi</h1>")));
+    assert!(started.elapsed() < Duration::from_secs(25), "ran to the deadline");
+}
+
+/// A browser dropped without `close` takes its profile with it.
+#[tokio::test]
+async fn a_dropped_browser_removes_its_profile() {
+    if !chrome() {
+        return;
+    }
+    let deadline = Deadline::new(tokio::time::Instant::now() + Duration::from_secs(30), None);
+    let browser = Browser::launch(None, &deadline).await.expect("the browser starts");
+    let profile = browser.profile().to_path_buf();
+    assert!(profile.exists());
+    drop(browser);
+    assert!(!profile.exists());
+}

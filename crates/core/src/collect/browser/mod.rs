@@ -8,7 +8,7 @@
 
 pub mod cdp;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -34,6 +34,12 @@ const QUIET_CAP: Duration = Duration::from_secs(15);
 /// Kept for the final evaluation before the browser deadline.
 const EVALUATE_RESERVE: Duration = Duration::from_millis(1500);
 const CONSOLE_LIMIT: usize = 20;
+/// Resources kept in the snapshot; the rest are counted out, with a warning.
+const RESOURCE_LIMIT: usize = 2000;
+/// Characters kept of each resource URL.
+const URL_LIMIT: usize = 2048;
+/// Requests tracked as in flight. Past it the page is far from quiet anyway.
+const INFLIGHT_LIMIT: usize = 5000;
 /// The browser's last stderr lines kept, to explain a failed start.
 const STDERR_LINES: usize = 5;
 
@@ -56,7 +62,7 @@ pub struct Browser {
     child: Child,
     conn: Connection,
     events: mpsc::UnboundedReceiver<Event>,
-    profile: PathBuf,
+    profile: Profile,
     executable: PathBuf,
     product: String,
     warnings: Vec<String>,
@@ -120,7 +126,6 @@ impl Browser {
         let executable = find_executable()?;
         let mut warnings = Vec::new();
         let profile = temporary_profile(&executable);
-        std::fs::create_dir_all(&profile).map_err(|e| format!("{}: {e}", profile.display()))?;
 
         let mut command = Command::new(&executable);
         command
@@ -169,9 +174,13 @@ impl Browser {
                 Ok(())
             });
         }
+        // The last step that can fail: the profile is created only now, and
+        // removed again if the browser does not start.
+        let profile = Profile::create(profile).map_err(|e| format!("could not create the profile: {e}"))?;
         let mut child = command
             .spawn()
             .map_err(|e| format!("could not start {}: {e}", executable.display()))?;
+        profile.attach(child.id());
         drop((child_reads, child_writes));
         // Drained to the end, or the browser blocks once the pipe is full.
         let stderr = Arc::new(Mutex::new(VecDeque::new()));
@@ -194,6 +203,15 @@ impl Browser {
         match browser.conn.call("Browser.getVersion", json!({}), None, deadline).await {
             Ok(v) => {
                 browser.product = v["product"].as_str().unwrap_or_default().to_owned();
+                // A page cannot drop files into the user's Downloads.
+                let denied = json!({ "behavior": "deny" });
+                if let Err(e) = browser
+                    .conn
+                    .call("Browser.setDownloadBehavior", denied, None, deadline)
+                    .await
+                {
+                    browser.warnings.push(format!("could not block downloads: {e}"));
+                }
                 Ok(browser)
             }
             Err(e) => {
@@ -341,15 +359,24 @@ impl Browser {
         data.quiet = quiet;
 
         let expression = collector_expression(&visit.js_paths, &visit.dom_properties);
-        let evaluated = self
-            .conn
-            .call(
-                "Runtime.evaluate",
-                json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
-                s,
-                deadline,
-            )
-            .await?;
+        let evaluate = self.conn.call(
+            "Runtime.evaluate",
+            json!({ "expression": expression, "returnByValue": true, "awaitPromise": true }),
+            s,
+            deadline,
+        );
+        tokio::pin!(evaluate);
+        // A dialog that opens now would block the page, and the evaluation with it.
+        let evaluated = loop {
+            tokio::select! {
+                result = &mut evaluate => break result?,
+                Some(event) = self.events.recv() => {
+                    if event.method == "Page.javascriptDialogOpening" && event.session.as_deref() == s {
+                        dismiss_dialog(&self.conn, &session, deadline).await;
+                    }
+                }
+            }
+        };
         if let Some(e) = evaluated.get("exceptionDetails") {
             return Err(format!(
                 "the page script failed: {}",
@@ -381,13 +408,17 @@ impl Browser {
         let mut loaded_at: Option<Instant> = None;
         let mut painted = false;
         let mut quiet_since: Option<Instant> = None;
-        let mut inflight: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let mut inflight: Inflight = HashMap::new();
         let mut tick = tokio::time::interval(Duration::from_millis(100));
         loop {
             tokio::select! {
                 event = self.events.recv() => {
                     let Some(event) = event else { return false };
                     if event.session.as_deref() != Some(session) {
+                        continue;
+                    }
+                    if event.method == "Page.javascriptDialogOpening" {
+                        dismiss_dialog(&self.conn, session, deadline).await;
                         continue;
                     }
                     record(&event, &mut inflight, data);
@@ -434,9 +465,92 @@ impl Browser {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
+        // Dropping kills a browser that is still running and deletes the profile.
+    }
+
+    /// The browser's temporary profile directory.
+    pub fn profile(&self) -> &Path {
+        &self.profile.path
+    }
+
+    /// The browser's process id.
+    pub fn pid(&self) -> u32 {
+        self.child.id()
+    }
+}
+
+/// A browser dropped without `close` (an error path, a panic, an abandoned
+/// future) must not outlive us or leave its profile behind.
+impl Drop for Browser {
+    fn drop(&mut self) {
         let _ = self.child.kill();
         let _ = self.child.wait();
-        let _ = std::fs::remove_dir_all(&self.profile);
+        // The process is gone: its id may be reused, so it leaves the registry.
+        self.profile.detach();
+    }
+}
+
+/// Profiles of the live browsers, with their process ids, so that a quit that
+/// runs no destructors (a second Ctrl-C) can still clean up.
+static LIVE: Mutex<Vec<(PathBuf, Option<u32>)>> = Mutex::new(Vec::new());
+
+/// A browser's temporary directory, deleted when it is dropped.
+struct Profile {
+    path: PathBuf,
+}
+
+impl Profile {
+    fn create(path: PathBuf) -> std::io::Result<Profile> {
+        std::fs::create_dir_all(&path)?;
+        if let Ok(mut live) = LIVE.lock() {
+            live.push((path.clone(), None));
+        }
+        Ok(Profile { path })
+    }
+
+    fn attach(&self, pid: u32) {
+        if let Ok(mut live) = LIVE.lock()
+            && let Some(entry) = live.iter_mut().find(|(p, _)| *p == self.path)
+        {
+            entry.1 = Some(pid);
+        }
+    }
+
+    fn detach(&self) {
+        if let Ok(mut live) = LIVE.lock()
+            && let Some(entry) = live.iter_mut().find(|(p, _)| *p == self.path)
+        {
+            entry.1 = None;
+        }
+    }
+}
+
+impl Drop for Profile {
+    fn drop(&mut self) {
+        if let Ok(mut live) = LIVE.lock() {
+            live.retain(|(p, _)| *p != self.path);
+        }
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+/// Kills every live browser and deletes its profile, for a process that is
+/// about to exit without running destructors. Best effort.
+pub fn cleanup_all() {
+    let live = match LIVE.try_lock() {
+        Ok(mut live) => std::mem::take(&mut *live),
+        Err(_) => return,
+    };
+    for (path, pid) in live {
+        #[cfg(unix)]
+        if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
+            // SAFETY: kill has no memory preconditions; the pid is of a child of ours
+            // that has not been waited for.
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        #[cfg(not(unix))]
+        let _ = pid;
+        let _ = std::fs::remove_dir_all(path);
     }
 }
 
@@ -487,8 +601,14 @@ fn temporary_profile(executable: &Path) -> PathBuf {
     }
 }
 
+/// Requests in flight: the index of their entry in `resources`, or `None` for
+/// a request past the cap, which is only counted.
+type Inflight = HashMap<String, Option<usize>>;
+
+const RESOURCES_CUT: &str = "the page made more requests than are listed; the resource list was cut";
+
 /// Network and console events into the snapshot's lists.
-fn record(event: &Event, inflight: &mut std::collections::HashMap<String, usize>, data: &mut BrowserData) {
+fn record(event: &Event, inflight: &mut Inflight, data: &mut BrowserData) {
     let p = &event.params;
     let id = p["requestId"].as_str().unwrap_or_default().to_owned();
     match event.method.as_str() {
@@ -497,22 +617,34 @@ fn record(event: &Event, inflight: &mut std::collections::HashMap<String, usize>
             if url.starts_with("data:") {
                 return;
             }
+            let url: String = url.chars().take(URL_LIMIT).collect();
             let kind = p["type"].as_str().unwrap_or("Other").to_owned();
             match inflight.get(&id) {
                 // A redirect: the same request continues at a new URL.
-                Some(&i) => data.resources[i].url = url.to_owned(),
+                Some(Some(i)) => data.resources[*i].url = url,
+                Some(None) => {}
                 None => {
-                    inflight.insert(id, data.resources.len());
-                    data.resources.push(BrowserResource {
-                        url: url.to_owned(),
-                        kind,
-                        ..BrowserResource::default()
-                    });
+                    let slot = if data.resources.len() < RESOURCE_LIMIT {
+                        data.resources.push(BrowserResource {
+                            url,
+                            kind,
+                            ..BrowserResource::default()
+                        });
+                        Some(data.resources.len() - 1)
+                    } else {
+                        if !data.warnings.iter().any(|w| w == RESOURCES_CUT) {
+                            data.warnings.push(RESOURCES_CUT.to_owned());
+                        }
+                        None
+                    };
+                    if inflight.len() < INFLIGHT_LIMIT {
+                        inflight.insert(id, slot);
+                    }
                 }
             }
         }
         "Network.responseReceived" => {
-            if let Some(&i) = inflight.get(&id) {
+            if let Some(&Some(i)) = inflight.get(&id) {
                 let r = &mut data.resources[i];
                 r.status = p["response"]["status"].as_u64().map(|s| s as u16);
                 r.mime = p["response"]["mimeType"].as_str().map(str::to_owned);
@@ -520,12 +652,12 @@ fn record(event: &Event, inflight: &mut std::collections::HashMap<String, usize>
             }
         }
         "Network.loadingFinished" => {
-            if let Some(i) = inflight.remove(&id) {
+            if let Some(Some(i)) = inflight.remove(&id) {
                 data.resources[i].transferred = p["encodedDataLength"].as_f64().unwrap_or(0.0) as u64;
             }
         }
         "Network.loadingFailed" => {
-            if let Some(i) = inflight.remove(&id) {
+            if let Some(Some(i)) = inflight.remove(&id) {
                 data.resources[i].failed = p["errorText"].as_str().map(str::to_owned);
             }
         }
@@ -561,6 +693,19 @@ fn record(event: &Event, inflight: &mut std::collections::HashMap<String, usize>
         }
         _ => {}
     }
+}
+
+/// Closes a JavaScript dialog (`alert`, `confirm`, `prompt`, `beforeunload`)
+/// without accepting it: left open, it blocks the page's renderer.
+async fn dismiss_dialog(conn: &Connection, session: &str, deadline: &Deadline) {
+    let _ = conn
+        .call(
+            "Page.handleJavaScriptDialog",
+            json!({ "accept": false }),
+            Some(session),
+            deadline,
+        )
+        .await;
 }
 
 fn push_console(data: &mut BrowserData, text: &str) {
@@ -689,5 +834,56 @@ mod tests {
             .map(|_| temporary_profile(Path::new("/usr/bin/chromium")))
             .collect();
         assert_eq!(names.len(), 1000);
+    }
+
+    fn request(id: &str, url: &str) -> Event {
+        Event {
+            method: "Network.requestWillBeSent".into(),
+            params: json!({ "requestId": id, "type": "Script", "request": { "url": url } }),
+            session: None,
+        }
+    }
+
+    #[test]
+    fn a_page_cannot_grow_the_resource_list_without_limit() {
+        let mut data = BrowserData::default();
+        let mut inflight = Inflight::new();
+        for i in 0..RESOURCE_LIMIT * 3 {
+            record(
+                &request(&format!("r{i}"), &format!("https://x.test/{i}.js")),
+                &mut inflight,
+                &mut data,
+            );
+        }
+        assert_eq!(data.resources.len(), RESOURCE_LIMIT);
+        assert_eq!(data.warnings, [RESOURCES_CUT]);
+        // Requests past the cap still count as in flight, and finishing them frees the map.
+        assert_eq!(inflight.len(), (RESOURCE_LIMIT * 3).min(INFLIGHT_LIMIT));
+        let finished = |id: &str| Event {
+            method: "Network.loadingFinished".into(),
+            params: json!({ "requestId": id, "encodedDataLength": 10.0 }),
+            session: None,
+        };
+        record(&finished("r0"), &mut inflight, &mut data);
+        record(&finished(&format!("r{}", RESOURCE_LIMIT + 1)), &mut inflight, &mut data);
+        assert_eq!(data.resources[0].transferred, 10);
+        assert_eq!(inflight.len(), (RESOURCE_LIMIT * 3).min(INFLIGHT_LIMIT) - 2);
+    }
+
+    #[test]
+    fn resource_urls_are_cut() {
+        let mut data = BrowserData::default();
+        let mut inflight = Inflight::new();
+        let long = format!("https://x.test/?q={}", "a".repeat(URL_LIMIT * 4));
+        record(&request("a", &long), &mut inflight, &mut data);
+        // A redirect to a long URL is cut too.
+        record(
+            &request("a", &long.replace("x.test", "y.test")),
+            &mut inflight,
+            &mut data,
+        );
+        assert_eq!(data.resources.len(), 1);
+        assert_eq!(data.resources[0].url.chars().count(), URL_LIMIT);
+        assert!(data.resources[0].url.starts_with("https://y.test/"));
     }
 }
