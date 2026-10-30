@@ -65,6 +65,41 @@ pub struct Evidence {
     pub value: String,
 }
 
+/// Where a technology was seen, which tells what it says about the site:
+/// `page` is what the site is built with; `dns` and `certificate` are services
+/// the owner uses (a mail provider, a domain-verification record) or the
+/// issuer of its certificate. Ordered by weight: the largest wins when a
+/// technology has several.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TechOrigin {
+    /// Only the certificate issuer.
+    Certificate,
+    /// Only DNS records.
+    Dns,
+    /// The page, its headers, cookies, scripts, URL, robots.txt or the browser.
+    Page,
+}
+
+impl TechOrigin {
+    /// The origin of one piece of evidence, by the field it came from.
+    pub fn of_field(field: &str) -> TechOrigin {
+        match field {
+            "dns" => TechOrigin::Dns,
+            "certIssuer" => TechOrigin::Certificate,
+            _ => TechOrigin::Page,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TechOrigin::Certificate => "certificate",
+            TechOrigin::Dns => "dns",
+            TechOrigin::Page => "page",
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Technology {
     pub name: String,
@@ -76,6 +111,13 @@ pub struct Technology {
     pub evidence: Vec<Evidence>,
     /// Set when the technology was not seen but implied by another.
     pub implied_by: Option<String>,
+    /// Where it was seen. An implied technology has the origin of what implied
+    /// it; the page wins if any of them came from the page.
+    pub origin: TechOrigin,
+    /// The best (lowest) priority among its categories: lower comes first, as
+    /// in Wappalyzer. For ordering only, not part of the report.
+    #[serde(skip)]
+    pub priority: u8,
 }
 
 /// Where the engine may find signatures besides the embedded ones.
@@ -473,21 +515,31 @@ impl Engine {
                     version: best_version(versions),
                     evidence: hits.evidence.get(&tech).cloned().unwrap_or_default(),
                     implied_by: None,
+                    origin: hits.origin.get(&tech).copied().unwrap_or(TechOrigin::Page),
                 },
             );
         }
 
-        // Implied technologies, recursively.
+        // Implied technologies, recursively. An implied technology takes the
+        // origin of what implied it, and a larger origin reaching one already
+        // found is passed on again.
         let mut queue: Vec<u32> = found.keys().copied().collect();
         while let Some(tech) = queue.pop() {
             let parent_confidence = found[&tech].confidence;
+            let parent_origin = found[&tech].origin;
             for implied in &self.index.techs[tech as usize].implies {
                 let Some(&target) = self.by_name.get(&implied.name) else {
                     continue;
                 };
                 let confidence = ((u32::from(implied.confidence) * u32::from(parent_confidence)) / 100) as u8;
                 match found.get_mut(&target) {
-                    Some(existing) => existing.confidence = existing.confidence.max(confidence),
+                    Some(existing) => {
+                        existing.confidence = existing.confidence.max(confidence);
+                        if parent_origin > existing.origin {
+                            existing.origin = parent_origin;
+                            queue.push(target);
+                        }
+                    }
                     None => {
                         found.insert(
                             target,
@@ -496,6 +548,7 @@ impl Engine {
                                 version: implied.version.clone(),
                                 evidence: Vec::new(),
                                 implied_by: Some(self.index.techs[tech as usize].name.clone()),
+                                origin: parent_origin,
                             },
                         );
                         queue.push(target);
@@ -570,6 +623,8 @@ impl Engine {
                         website: tech.website.clone(),
                         evidence: f.evidence,
                         implied_by: f.implied_by,
+                        origin: f.origin,
+                        priority,
                     },
                 )
             })
@@ -584,6 +639,7 @@ struct Found {
     version: Option<String>,
     evidence: Vec<Evidence>,
     implied_by: Option<String>,
+    origin: TechOrigin,
 }
 
 #[derive(Default)]
@@ -591,6 +647,9 @@ struct Hits {
     /// Per technology, per pattern: best confidence and a version.
     by_tech: BTreeMap<u32, BTreeMap<u32, (u8, Option<String>)>>,
     evidence: HashMap<u32, Vec<Evidence>>,
+    /// Per technology, the largest origin among all its hits. Kept apart from
+    /// `evidence`, which stops at five items and could lose the page hit.
+    origin: HashMap<u32, TechOrigin>,
 }
 
 impl Hits {
@@ -605,6 +664,8 @@ impl Hits {
         if entry.1.is_none() {
             entry.1 = version.filter(|v| !v.is_empty());
         }
+        let origin = self.origin.entry(pattern.tech).or_insert(TechOrigin::Certificate);
+        *origin = (*origin).max(TechOrigin::of_field(evidence.field));
         let list = self.evidence.entry(pattern.tech).or_default();
         if list.len() < 5 && !list.contains(&evidence) {
             list.push(evidence);

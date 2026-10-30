@@ -171,3 +171,122 @@ fn embedded_index_loads_and_detects_common_stacks() {
     // loose upstream pattern called it Google Tag Manager.
     assert!(!found.contains(&"Google Tag Manager".to_owned()), "{found:?}");
 }
+
+const ORIGIN_SIGNATURES: &str = r##"{
+    "Mailer": {"cats": [1], "dns": {"TXT": "^mailer-verification="}, "implies": ["Mail API"]},
+    "Mail API": {"cats": [2]},
+    "Issuer": {"cats": [1], "certIssuer": "Some Issuer"},
+    "Builder": {"cats": [1], "headers": {"x-built-with": "builder"}, "implies": ["Runtime", "Mail API"]},
+    "Runtime": {"cats": [2]},
+    "Both": {"cats": [1], "dns": {"TXT": "both-record"}, "headers": {"x-both": ""}},
+    "Chain": {"cats": [1], "dns": {"TXT": "chain-record"}, "implies": ["Middle"]},
+    "Middle": {"cats": [2], "implies": ["End"]},
+    "End": {"cats": [2]}
+}"##;
+
+fn origins(found: &[Technology]) -> Vec<(String, TechOrigin)> {
+    found.iter().map(|t| (t.name.clone(), t.origin)).collect()
+}
+
+fn origin_of(found: &[Technology], name: &str) -> TechOrigin {
+    found.iter().find(|t| t.name == name).unwrap().origin
+}
+
+#[test]
+fn origin_follows_the_evidence_field() {
+    let engine = engine_for(ORIGIN_SIGNATURES);
+    let inputs = Inputs {
+        dns: vec![("TXT".into(), "mailer-verification=abc".into())],
+        cert_issuer: Some("Some Issuer Inc".into()),
+        headers: vec![("x-both".into(), "1".into())],
+        ..Default::default()
+    };
+    let found = engine.detect(&inputs);
+    assert_eq!(origin_of(&found, "Mailer"), TechOrigin::Dns);
+    assert_eq!(origin_of(&found, "Issuer"), TechOrigin::Certificate);
+    // Seen through a header and no DNS record here: the page.
+    assert_eq!(origin_of(&found, "Both"), TechOrigin::Page);
+}
+
+#[test]
+fn page_wins_over_dns_when_a_technology_has_both() {
+    let engine = engine_for(ORIGIN_SIGNATURES);
+    let inputs = Inputs {
+        dns: vec![("TXT".into(), "both-record".into())],
+        headers: vec![("x-both".into(), "1".into())],
+        ..Default::default()
+    };
+    let found = engine.detect(&inputs);
+    assert_eq!(origin_of(&found, "Both"), TechOrigin::Page);
+    let dns_only = engine.detect(&Inputs {
+        dns: vec![("TXT".into(), "both-record".into())],
+        ..Default::default()
+    });
+    assert_eq!(origin_of(&dns_only, "Both"), TechOrigin::Dns);
+}
+
+#[test]
+fn an_implied_technology_inherits_the_origin_of_its_implier() {
+    let engine = engine_for(ORIGIN_SIGNATURES);
+    let dns_only = engine.detect(&Inputs {
+        dns: vec![("TXT".into(), "mailer-verification=abc".into())],
+        ..Default::default()
+    });
+    assert_eq!(
+        origins(&dns_only),
+        [("Mailer".to_owned(), TechOrigin::Dns), ("Mail API".to_owned(), TechOrigin::Dns)]
+    );
+    // Implied through a chain: dns all the way down.
+    let chain = engine.detect(&Inputs {
+        dns: vec![("TXT".into(), "chain-record".into())],
+        ..Default::default()
+    });
+    assert!(chain.iter().all(|t| t.origin == TechOrigin::Dns), "{:?}", origins(&chain));
+    assert_eq!(chain.len(), 3);
+}
+
+#[test]
+fn an_implied_technology_is_page_if_any_implier_is_page() {
+    let engine = engine_for(ORIGIN_SIGNATURES);
+    // Mail API is implied by Mailer (dns) and by Builder (page).
+    let found = engine.detect(&Inputs {
+        dns: vec![("TXT".into(), "mailer-verification=abc".into())],
+        headers: vec![("x-built-with".into(), "builder".into())],
+        ..Default::default()
+    });
+    assert_eq!(origin_of(&found, "Mailer"), TechOrigin::Dns);
+    assert_eq!(origin_of(&found, "Mail API"), TechOrigin::Page);
+    assert_eq!(origin_of(&found, "Runtime"), TechOrigin::Page);
+}
+
+#[test]
+fn a_larger_origin_reaching_a_found_technology_passes_down() {
+    let engine = engine_for(
+        r#"{
+        "Seed": {"cats": [1], "dns": {"TXT": "seed"}, "implies": ["Mid"]},
+        "Page": {"cats": [1], "headers": {"x-page": ""}, "implies": ["Mid"]},
+        "Mid": {"cats": [2], "implies": ["Tail"]},
+        "Tail": {"cats": [2]}
+    }"#,
+    );
+    let found = engine.detect(&Inputs {
+        dns: vec![("TXT".into(), "seed".into())],
+        headers: vec![("x-page".into(), "1".into())],
+        ..Default::default()
+    });
+    assert_eq!(origin_of(&found, "Seed"), TechOrigin::Dns);
+    assert_eq!(origin_of(&found, "Mid"), TechOrigin::Page);
+    assert_eq!(origin_of(&found, "Tail"), TechOrigin::Page);
+}
+
+#[test]
+fn the_origin_is_in_the_json() {
+    let engine = engine_for(ORIGIN_SIGNATURES);
+    let found = engine.detect(&Inputs {
+        cert_issuer: Some("Some Issuer Inc".into()),
+        ..Default::default()
+    });
+    let json = serde_json::to_value(&found[0]).unwrap();
+    assert_eq!(json["origin"], "certificate");
+    assert!(json.get("priority").is_none());
+}

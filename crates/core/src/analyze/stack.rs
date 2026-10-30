@@ -276,8 +276,9 @@ fn same_page(a: &str, b: &str) -> bool {
     strip(a) == strip(b)
 }
 
-/// Adds the browser pass to the static one: new technologies are appended, a
-/// version seen by the browser wins, and both passes' evidence is kept.
+/// Adds the browser pass to the static one: new technologies are added, a
+/// version seen by the browser wins, the larger origin wins, and both passes'
+/// evidence is kept.
 fn merge(technologies: &mut Vec<Technology>, browser: Vec<Technology>) {
     for found in browser {
         match technologies.iter_mut().find(|t| t.name == found.name) {
@@ -286,6 +287,7 @@ fn merge(technologies: &mut Vec<Technology>, browser: Vec<Technology>) {
                     t.version = found.version;
                 }
                 t.confidence = t.confidence.max(found.confidence);
+                t.origin = t.origin.max(found.origin);
                 if found.implied_by.is_none() {
                     t.implied_by = None;
                 }
@@ -298,6 +300,8 @@ fn merge(technologies: &mut Vec<Technology>, browser: Vec<Technology>) {
             None => technologies.push(found),
         }
     }
+    // New ones were appended; keep the engine's order (category priority, name).
+    technologies.sort_by(|a, b| a.priority.cmp(&b.priority).then_with(|| a.name.cmp(&b.name)));
 }
 
 fn visible_text(facts: &crate::extract::PageFacts) -> String {
@@ -321,7 +325,7 @@ fn short_source(source: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::Evidence;
+    use crate::detect::{Evidence, TechOrigin};
 
     fn tech(name: &str, version: Option<&str>, field: &'static str) -> Technology {
         Technology {
@@ -336,6 +340,8 @@ mod tests {
                 value: name.to_lowercase(),
             }],
             implied_by: None,
+            origin: TechOrigin::of_field(field),
+            priority: 9,
         }
     }
 
@@ -347,10 +353,20 @@ mod tests {
             vec![tech("React", Some("18.2.0"), "js"), tech("Sentry", None, "js")],
         );
         let names: Vec<&str> = static_pass.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, ["React", "Nginx", "Sentry"]);
-        assert_eq!(static_pass[0].version.as_deref(), Some("18.2.0"));
-        let fields: Vec<&str> = static_pass[0].evidence.iter().map(|e| e.field).collect();
+        assert_eq!(names, ["Nginx", "React", "Sentry"]);
+        let react = &static_pass[1];
+        assert_eq!(react.version.as_deref(), Some("18.2.0"));
+        let fields: Vec<&str> = react.evidence.iter().map(|e| e.field).collect();
         assert_eq!(fields, ["html", "js"]);
+    }
+
+    #[test]
+    fn the_browser_pass_can_only_raise_the_origin() {
+        let mut found = vec![tech("Zoom", None, "dns")];
+        merge(&mut found, vec![tech("Zoom", None, "js")]);
+        assert_eq!(found[0].origin, TechOrigin::Page);
+        merge(&mut found, vec![tech("Zoom", None, "dns")]);
+        assert_eq!(found[0].origin, TechOrigin::Page);
     }
 
     #[test]
