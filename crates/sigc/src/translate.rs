@@ -15,6 +15,7 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
     let mut engine = Engine::Regex;
     let mut in_class = false;
     let mut class_start = false;
+    let mut class = ClassState::default();
     let mut i = 0;
 
     while i < chars.len() {
@@ -27,6 +28,10 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                     return Err("pattern ends with a lone backslash".into());
                 };
                 i += 2;
+                if in_class {
+                    // Class shorthands cannot start or end a range.
+                    class.item(!matches!(next, 'd' | 'D' | 'w' | 'W' | 's' | 'S'));
+                }
                 match next {
                     '1'..='9' if !in_class => {
                         engine = Engine::Fancy;
@@ -46,7 +51,13 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                     'x' => {
                         let hex: String = chars[i..].iter().take(2).collect();
                         if hex.len() == 2 && hex.chars().all(|h| h.is_ascii_hexdigit()) {
-                            out.push_str(&format!("\\x{hex}"));
+                            // Above ASCII, JavaScript means the character; `\xE9` alone
+                            // is the byte 0xE9 to a Unicode-off regex, never the UTF-8 text.
+                            if hex.as_bytes()[0] >= b'8' {
+                                out.push_str(&format!("\\x{{{hex}}}"));
+                            } else {
+                                out.push_str(&format!("\\x{hex}"));
+                            }
                             i += 2;
                         } else {
                             out.push('x');
@@ -69,6 +80,8 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                         out.push(next);
                     }
                     'b' => out.push_str("\\x08"),
+                    // `\<` and `\>` are word boundaries to the regex crate, literals in JS.
+                    '<' | '>' => out.push(next),
                     // Identity escapes of punctuation keep their literal meaning.
                     p if p.is_ascii_punctuation() => {
                         out.push('\\');
@@ -79,7 +92,10 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                 }
                 continue;
             }
-            '[' if in_class => out.push_str("\\["),
+            '[' if in_class => {
+                class.item(true);
+                out.push_str("\\[");
+            }
             '[' => {
                 // `[^]` matches any character in JavaScript.
                 if chars.get(i + 1) == Some(&'^') && chars.get(i + 2) == Some(&']') {
@@ -92,6 +108,7 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                 }
                 in_class = true;
                 class_start = true;
+                class = ClassState::default();
                 out.push('[');
                 if chars.get(i + 1) == Some(&'^') {
                     out.push('^');
@@ -105,8 +122,29 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
             }
             // Characters that are set operators in Rust classes but plain in JS.
             '&' | '~' if in_class => {
+                class.item(true);
                 out.push('\\');
                 out.push(c);
+            }
+            // `--` is the difference operator in Rust classes. Ranges keep their
+            // dash; a dash that is a range's end, or a literal next to another
+            // dash, is escaped (`[+--]` is the range from `+` to `-`).
+            '-' if in_class => {
+                let range_start = class.prev_atom && chars.get(i + 1).is_some_and(|&n| n != ']');
+                if class.range_open {
+                    out.push_str("\\-");
+                    class.item(false);
+                } else if range_start {
+                    out.push('-');
+                    class.prev_atom = false;
+                    class.range_open = true;
+                } else if chars.get(i + 1) == Some(&'-') {
+                    out.push_str("\\-");
+                    class.item(true);
+                } else {
+                    out.push('-');
+                    class.item(true);
+                }
             }
             '{' if !in_class => match quantifier_len(&chars[i..]) {
                 Some(len) => {
@@ -124,7 +162,12 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
                 }
                 out.push('(');
             }
-            _ => out.push(c),
+            _ => {
+                if in_class && !(c == ']' && !first_in_class) {
+                    class.item(true);
+                }
+                out.push(c);
+            }
         }
         i += 1;
     }
@@ -132,6 +175,22 @@ pub fn translate(js: &str) -> Result<(String, Engine), String> {
         return Err("unterminated character class".into());
     }
     Ok((out, engine))
+}
+
+/// Where a character class is: whether the last item can start a range, and
+/// whether a range operator is waiting for its end.
+#[derive(Default)]
+struct ClassState {
+    prev_atom: bool,
+    range_open: bool,
+}
+
+impl ClassState {
+    /// One class item was written; `atom` if it is a single character.
+    fn item(&mut self, atom: bool) {
+        self.prev_atom = atom && !self.range_open;
+        self.range_open = false;
+    }
 }
 
 /// Length of a `{n}`, `{n,}` or `{n,m}` quantifier at the start of `chars`.
@@ -164,6 +223,58 @@ mod tests {
         assert_eq!(rust(r"\u00e9t\x41"), r"\x{00e9}t\x41");
         assert_eq!(rust(r"a\0b"), r"a\x00b");
         assert_eq!(rust(r"\a"), "a");
+    }
+
+    /// Builds the way the compiler and the runtime do: ASCII first, Unicode if
+    /// the pattern needs it.
+    fn matches(js: &str, haystack: &str) -> bool {
+        let (rust, _) = translate(js).unwrap();
+        let build = |unicode| {
+            regex::bytes::RegexBuilder::new(&rust)
+                .case_insensitive(true)
+                .unicode(unicode)
+                .build()
+        };
+        let re = build(false)
+            .or_else(|_| build(true))
+            .unwrap_or_else(|e| panic!("{js} -> {rust}: {e}"));
+        re.is_match(haystack.as_bytes())
+    }
+
+    #[test]
+    fn angle_escapes_are_literal_characters() {
+        // regex-syntax 0.8 reads `\<` and `\>` as word-boundary assertions.
+        assert_eq!(rust(r"a\<b\>"), "a<b>");
+        assert_eq!(rust(r"[\<\>]"), "[<>]");
+        assert!(matches(r"a\<b\>", "xa<b>"));
+        assert!(!matches(r"a\<b", "a b"));
+        assert!(matches(r"[\<]x", "<x"));
+    }
+
+    #[test]
+    fn unicode_escapes_match_the_utf8_character() {
+        // `\u` already worked: `\x{e9}` compiles to the UTF-8 bytes even with
+        // Unicode off. `\xe9` did not: it is the single byte 0xE9 there.
+        assert!(matches(r"café", "café"));
+        assert!(matches(r"caf\xe9", "café"));
+        assert!(matches(r"[\xe8\xe9]x", "éx"));
+        assert!(!matches(r"caf\xe9", "caf\u{fffd}"));
+        assert_eq!(rust(r"\xe9"), r"\x{e9}");
+        assert_eq!(rust(r"\x41"), r"\x41");
+    }
+
+    #[test]
+    fn class_set_operators_are_literal() {
+        assert!(matches("[a&&b]", "&"));
+        assert!(matches("[a~~b]", "~"));
+        assert!(matches("[a||b]", "|"));
+        assert!(!matches("^[a||b]$", "x"));
+        // `[+--]` is the range from `+` to `-` in JavaScript: `,` is in it.
+        assert!(matches("^[+--]$", ","));
+        assert!(matches("^[+--]$", "-"));
+        assert!(!matches("^[+--]$", "."));
+        // Ordinary dashes keep their form.
+        assert_eq!(rust("jquery[.-]x[a-z-9]"), "jquery[.-]x[a-z-9]");
     }
 
     #[test]
