@@ -179,9 +179,29 @@ pub fn finding(id: &'static str, params: &[(&str, String)], evidence: String) ->
 }
 
 fn fill(template: &str, params: &BTreeMap<String, String>) -> String {
-    params.iter().fold(template.to_owned(), |text, (key, value)| {
-        text.replace(&format!("{{{key}}}"), value)
-    })
+    // One pass over the template, so a value that happens to hold `{other}` is never
+    // expanded by a later parameter. Unknown placeholders stay as written.
+    let mut out = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open + 1..];
+        match after
+            .find('}')
+            .and_then(|close| params.get(&after[..close]).map(|v| (close, v)))
+        {
+            Some((close, value)) => {
+                out.push_str(value);
+                rest = &after[close + 1..];
+            }
+            None => {
+                out.push('{');
+                rest = after;
+            }
+        }
+    }
+    out.push_str(rest);
+    out
 }
 
 #[cfg(test)]
@@ -213,6 +233,20 @@ mod tests {
         let source = "severity: low\r\ntitle: T\r\n---\r\nDetail.\r\n\r\n## Fix\r\nFix it.\r\n";
         let entry = parse(source).unwrap();
         assert_eq!((entry.title, entry.detail, entry.fix), ("T", "Detail.", "Fix it."));
+    }
+
+    #[test]
+    fn fill_does_not_expand_placeholders_inside_values() {
+        // "a" sorts before "domain": a sequential replace would expand the `{domain}` that
+        // arrived inside a server-controlled value.
+        let params: BTreeMap<String, String> = [("a", "x{domain}y"), ("domain", "example.com")]
+            .into_iter()
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+        assert_eq!(
+            fill("{a} and {domain} {unknown} {", &params),
+            "x{domain}y and example.com {unknown} {"
+        );
     }
 
     #[test]
