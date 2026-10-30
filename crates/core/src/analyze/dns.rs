@@ -65,6 +65,21 @@ impl DomainReport {
     pub fn caa_absence_known(&self) -> bool {
         self.absences_reliable && !self.failed_queries.iter().any(|q| q.ends_with(" CAA"))
     }
+
+    /// The host of the MX with the lowest preference (the first listed wins a tie),
+    /// without the preference number or the trailing dot. `None` without MX records
+    /// or when the only one is the null MX.
+    pub fn primary_mx_host(&self) -> Option<&str> {
+        self.mx
+            .iter()
+            .filter_map(|m| {
+                let preference = m.split_whitespace().next()?.parse::<u32>().unwrap_or(u32::MAX);
+                let host = mx_host(m).trim_end_matches('.');
+                (!host.is_empty()).then_some((preference, host))
+            })
+            .min_by_key(|(preference, _)| *preference)
+            .map(|(_, host)| host)
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -748,5 +763,25 @@ mod tests {
         keys.dedup();
         assert_eq!(keys.len(), total);
         assert_eq!(module.findings.iter().filter(|f| f.id == "mail.dmarc.none").count(), 2);
+    }
+
+    #[test]
+    fn primary_mx_is_the_lowest_preference_without_the_number() {
+        let rec = domain_records(vec![answer(
+            "exemplo.com.br",
+            "MX",
+            &["20 backup.example.net.", "5 mx.example.net.", "5 mx2.example.net."],
+        )]);
+        let d = domain(&rec, &mut Vec::new());
+        assert_eq!(d.primary_mx_host(), Some("mx.example.net"));
+        // The full records stay in the data.
+        assert_eq!(d.mx.len(), 3);
+        assert!(d.mx[0].starts_with("20 "));
+    }
+
+    #[test]
+    fn null_mx_has_no_primary_host() {
+        let rec = domain_records(vec![answer("exemplo.com.br", "MX", &["0 "])]);
+        assert_eq!(domain(&rec, &mut Vec::new()).primary_mx_host(), None);
     }
 }

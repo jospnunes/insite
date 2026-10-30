@@ -505,6 +505,7 @@ fn email(d: &DomainReport, s: &Style) -> String {
         Some(mx) => parts.push(
             d.mail_provider
                 .clone()
+                .or_else(|| d.primary_mx_host().map(str::to_owned))
                 .unwrap_or_else(|| mx.trim_end_matches('.').to_owned()),
         ),
         None if d.absence_known(reg, "MX") => parts.push("no MX".to_owned()),
@@ -1102,5 +1103,45 @@ pub(crate) mod tests {
             wrapped.lines().all(|l| l.len() <= 40 && l.starts_with("    ")),
             "{wrapped}"
         );
+    }
+
+    fn domain_report(mx: &[&str], mail_provider: Option<&str>) -> DomainReport {
+        DomainReport {
+            domain: "exemplo.com.br".into(),
+            role: "input",
+            host: "exemplo.com.br".into(),
+            a: Vec::new(),
+            aaaa: Vec::new(),
+            cname: Vec::new(),
+            ns: Vec::new(),
+            dns_provider: None,
+            mx: mx.iter().map(|m| (*m).to_owned()).collect(),
+            null_mx: false,
+            mail_provider: mail_provider.map(str::to_owned),
+            caa: Vec::new(),
+            dnssec: false,
+            spf: None,
+            dmarc: None,
+            dkim_selectors_found: Vec::new(),
+            mta_sts: false,
+            tls_rpt: false,
+            bimi: false,
+            failed_queries: Vec::new(),
+            authoritative_queries: Vec::new(),
+            absences_reliable: true,
+        }
+    }
+
+    #[test]
+    fn email_line_never_prints_the_mx_preference() {
+        let s = Style::new(false);
+        // Known provider: its name.
+        let known = domain_report(&["32456 smtp.globo.com"], Some("Globo"));
+        assert!(email(&known, &s).starts_with("Globo"), "{}", email(&known, &s));
+        // Unknown provider: the host of the lowest preference, with no number.
+        let unknown = domain_report(&["28 route2.mx.cloudflare.net.", "5 route1.mx.cloudflare.net."], None);
+        let line = email(&unknown, &s);
+        assert!(line.starts_with("route1.mx.cloudflare.net ·"), "{line}");
+        assert!(!line.contains("28") && !line.contains(" 5 "), "{line}");
     }
 }
