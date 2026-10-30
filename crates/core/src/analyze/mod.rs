@@ -10,6 +10,7 @@ pub mod seo;
 pub mod spf;
 pub mod stack;
 pub mod tls;
+pub mod vulnerable;
 pub mod weight;
 
 use std::panic::{AssertUnwindSafe, catch_unwind};

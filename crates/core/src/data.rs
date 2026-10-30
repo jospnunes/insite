@@ -204,6 +204,13 @@ pub fn sources(signatures: Option<String>) -> Vec<crate::report::DataSource> {
             license: "GPL-3.0",
         })
         .collect();
+    if !list.is_empty() {
+        list.push(DataSource {
+            name: "retire.js",
+            version: crate::analyze::vulnerable::provenance(),
+            license: "Apache-2.0",
+        });
+    }
     list.extend([
         DataSource {
             name: "ccadb",

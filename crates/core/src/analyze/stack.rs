@@ -120,11 +120,12 @@ pub fn analyze(snapshot: &Snapshot, content: &Result<Content, String>) -> Module
     } else {
         Status::Ok
     };
+    let findings = super::vulnerable::findings(&data.technologies);
     Module {
         status,
         reason: limitation,
         data: Some(data),
-        findings: Vec::new(),
+        findings,
     }
 }
 

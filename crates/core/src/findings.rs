@@ -107,6 +107,7 @@ catalog![
     "sec.version_leak",
     "sec.permissions_policy.missing",
     "sec.security_txt.expired",
+    "stack.library.vulnerable",
     "perf.lcp.poor",
     "perf.cls.poor",
     "perf.tbt.poor",
