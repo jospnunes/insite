@@ -466,8 +466,14 @@ fn hsts_results() {
     for v in ["max-age=abc", "max-age=", "max-age=\"\"", "max-age=; includeSubDomains"] {
         assert_eq!(hsts(v), "hsts-implemented-max-age-at-least-six-months", "{v}");
     }
-    assert_eq!(hsts("max-age=86400abc"), "hsts-implemented-max-age-less-than-six-months");
-    assert_eq!(hsts("max-age=31536000abc"), "hsts-implemented-max-age-at-least-six-months");
+    assert_eq!(
+        hsts("max-age=86400abc"),
+        "hsts-implemented-max-age-less-than-six-months"
+    );
+    assert_eq!(
+        hsts("max-age=31536000abc"),
+        "hsts-implemented-max-age-at-least-six-months"
+    );
     assert_eq!(hsts("max-age=-1"), "hsts-implemented-max-age-less-than-six-months");
     assert_eq!(hsts("max-age=31536000, max-age=0"), "hsts-header-invalid");
     let mut plain = site(&[], PAGE);

@@ -197,7 +197,8 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
     // A null MX (`0 .`, RFC 7505) declares that the domain accepts no mail.
     let receives_mail = mx.iter().any(|m| !mx_host(m).trim_end_matches('.').is_empty());
     let null_mx = !mx.is_empty() && !receives_mail;
-    if mx_known && !receives_mail && spf.is_none() && dmarc.is_none() && txt_known(records, reg) {
+    if mx_known && !receives_mail && spf.is_none() && dmarc.is_none() && txt_known(records, reg) && dmarc_known(records)
+    {
         findings.push(finding(
             "mail.spoofable",
             &[("domain", reg.to_owned())],
@@ -211,7 +212,7 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
                 format!("no v=spf1 TXT record at {reg}"),
             ));
         }
-        if dmarc.is_none() && txt_known(records, &format!("_dmarc.{reg}")) {
+        if dmarc.is_none() && dmarc_known(records) {
             findings.push(finding(
                 "mail.dmarc.missing",
                 &[("domain", reg.to_owned())],
@@ -262,6 +263,14 @@ fn domain(records: &DomainRecords, findings: &mut Vec<Finding>) -> DomainReport 
         authoritative_queries,
         absences_reliable: true,
     }
+}
+
+/// Whether every place DMARC is looked up (the host's `_dmarc` name, then the registrable
+/// domain's) answered. A failed query means DMARC is unknown there, not absent.
+fn dmarc_known(records: &DomainRecords) -> bool {
+    [&records.host, &records.registrable]
+        .into_iter()
+        .all(|name| txt_known(records, &format!("_dmarc.{name}")))
 }
 
 fn txt_known(records: &DomainRecords, name: &str) -> bool {
@@ -612,11 +621,49 @@ mod tests {
         let rec = domain_records(vec![
             answer("exemplo.com.br", "MX", &[]),
             answer("exemplo.com.br", "TXT", &[]),
+            answer("_dmarc.www.exemplo.com.br", "TXT", &[]),
             answer("_dmarc.exemplo.com.br", "TXT", &[]),
         ]);
         let mut findings = Vec::new();
         domain(&rec, &mut findings);
         assert_eq!(ids(&findings), ["mail.spoofable"]);
+    }
+
+    fn failed(name: &str, rtype: &str) -> DnsAnswer {
+        DnsAnswer {
+            name: name.into(),
+            record_type: rtype.into(),
+            result: DnsResult::Failed("timeout".into()),
+            authoritative: None,
+        }
+    }
+
+    #[test]
+    fn a_failed_dmarc_query_is_not_a_missing_dmarc() {
+        // No mail, no SPF, and the DMARC lookup failed at either level: unknown, not absent.
+        for failing in ["_dmarc.exemplo.com.br", "_dmarc.www.exemplo.com.br"] {
+            let mut answers = vec![
+                answer("exemplo.com.br", "MX", &[]),
+                answer("exemplo.com.br", "TXT", &[]),
+                answer("_dmarc.www.exemplo.com.br", "TXT", &[]),
+                answer("_dmarc.exemplo.com.br", "TXT", &[]),
+            ];
+            answers.retain(|a| a.name != failing);
+            answers.push(failed(failing, "TXT"));
+            let mut findings = Vec::new();
+            domain(&domain_records(answers), &mut findings);
+            assert!(findings.is_empty(), "{failing}: {:?}", ids(&findings));
+        }
+        // Mail is received: the same gap must not yield mail.dmarc.missing either.
+        let rec = domain_records(vec![
+            answer("exemplo.com.br", "MX", &["10 mx.example.net"]),
+            answer("exemplo.com.br", "TXT", &["v=spf1 -all"]),
+            failed("_dmarc.www.exemplo.com.br", "TXT"),
+            answer("_dmarc.exemplo.com.br", "TXT", &[]),
+        ]);
+        let mut findings = Vec::new();
+        domain(&rec, &mut findings);
+        assert!(findings.is_empty(), "{:?}", ids(&findings));
     }
 
     #[test]

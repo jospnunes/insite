@@ -962,7 +962,10 @@ fn js_parse_int(s: &str) -> Option<i128> {
     let digits = rest.bytes().take_while(u8::is_ascii_digit);
     let mut value: Option<i128> = None;
     for d in digits {
-        let v = value.unwrap_or(0).saturating_mul(10).saturating_add(i128::from(d - b'0'));
+        let v = value
+            .unwrap_or(0)
+            .saturating_mul(10)
+            .saturating_add(i128::from(d - b'0'));
         value = Some(v);
     }
     value.map(|v| if negative { -v } else { v })
