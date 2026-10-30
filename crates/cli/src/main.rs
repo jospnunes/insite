@@ -169,9 +169,10 @@ fn main() -> ExitCode {
         return snapshots::analyze_saved(path, selection, format);
     }
 
-    if !(args.timeout.is_finite() && args.timeout > 0.0) {
-        return usage_error("--timeout must be a positive number of seconds");
-    }
+    let timeout = match seconds("--timeout", args.timeout) {
+        Ok(t) => t,
+        Err(e) => return usage_error(&e),
+    };
     if args.concurrency == 0 {
         return usage_error("--concurrency must be at least 1");
     }
@@ -193,7 +194,7 @@ fn main() -> ExitCode {
         accept_language: args.lang.clone().unwrap_or_else(accept_language_from_env),
         accept_encoding: ACCEPT_ENCODING_VALUE.to_owned(),
     });
-    opts.timeout = Duration::from_secs_f64(args.timeout);
+    opts.timeout = timeout;
     opts.fetch = Fetch::for_modules(selection);
     opts.proxy = match proxy_from_env() {
         Ok(p) => p,
@@ -207,9 +208,10 @@ fn main() -> ExitCode {
             .is_some_and(|m| m.split(',').any(|n| n.trim().eq_ignore_ascii_case("browser")));
     let browser = if browser_wanted {
         let timeout = args.browser_timeout.unwrap_or(if args.throttle { 60.0 } else { 20.0 });
-        if !(timeout.is_finite() && timeout > 0.0) {
-            return usage_error("--browser-timeout must be a positive number of seconds");
-        }
+        let timeout = match seconds("--browser-timeout", timeout) {
+            Ok(t) => t,
+            Err(e) => return usage_error(&e),
+        };
         let (js_paths, dom_properties) = insite_core::detect::engine().browser_queries();
         Some(run::BrowserPlan {
             visit: insite_core::collect::browser::Visit {
@@ -220,7 +222,7 @@ fn main() -> ExitCode {
                 js_paths,
                 dom_properties,
             },
-            timeout: Duration::from_secs_f64(timeout),
+            timeout,
             proxy: browser_proxy(),
         })
     } else {
@@ -236,6 +238,20 @@ fn main() -> ExitCode {
         concurrency: args.concurrency,
         browser,
     })
+}
+
+/// The longest timeout accepted: a year. Beyond it, `Instant` arithmetic can overflow.
+const MAX_TIMEOUT_SECS: f64 = 365.0 * 86_400.0;
+
+/// A flag's seconds as a `Duration`, or the usage error to print.
+fn seconds(flag: &str, value: f64) -> Result<Duration, String> {
+    if value.is_finite() && value > 0.0 && value <= MAX_TIMEOUT_SECS {
+        Duration::try_from_secs_f64(value).map_err(|e| format!("{flag}: {e}"))
+    } else {
+        Err(format!(
+            "{flag} must be a positive number of seconds, at most {MAX_TIMEOUT_SECS:.0}"
+        ))
+    }
 }
 
 pub fn usage_error(message: &str) -> ExitCode {
@@ -331,6 +347,18 @@ fn accept_language(locale: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn timeouts_are_checked_instead_of_panicking() {
+        assert_eq!(seconds("--timeout", 2.5), Ok(Duration::from_millis(2500)));
+        for bad in [0.0, -1.0, f64::NAN, f64::INFINITY, 1e300, 1e19, MAX_TIMEOUT_SECS + 1.0] {
+            let err = seconds("--timeout", bad).unwrap_err();
+            assert!(
+                err.starts_with("--timeout must be a positive number of seconds"),
+                "{bad}: {err}"
+            );
+        }
+    }
 
     #[test]
     fn accept_language_from_locales() {
