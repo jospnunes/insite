@@ -124,12 +124,15 @@ fn module(status: Status, reason: Option<String>, data: Option<Tls>, findings: V
 /// Everything we can say about one TLS connection. `now` is Unix seconds.
 pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Finding>) {
     let mut findings = Vec::new();
-    let parsed: Vec<X509Certificate> = tls
+    // Position matters: the first certificate the server sends is the leaf. If it
+    // cannot be read, the next one is an intermediate, not a stand-in.
+    let decoded: Vec<Option<X509Certificate>> = tls
         .certificates
         .iter()
-        .filter_map(|der| parse_x509_certificate(der).ok().map(|(_, c)| c))
+        .map(|der| parse_x509_certificate(der).ok().map(|(_, c)| c))
         .collect();
-    let leaf = parsed.first().filter(|_| !tls.certificates.is_empty());
+    let leaf = decoded.first().and_then(Option::as_ref);
+    let parsed: Vec<&X509Certificate> = decoded.iter().flatten().collect();
     let host_text = host.to_string();
 
     let certificate = leaf.map(|leaf| {
@@ -207,6 +210,7 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
     }
 
     if let Verification::Invalid { problem, message } = &tls.verification
+        && leaf.is_some()
         && let Some(f) = trust_finding(*problem, message, &parsed)
     {
         findings.push(f);
@@ -232,9 +236,10 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
             Verification::Invalid { message, .. } => Some(message.clone()),
         },
         certificate,
-        chain: parsed
+        chain: decoded
             .iter()
             .skip(1)
+            .flatten()
             .map(|c| ChainEntry {
                 subject: subject_of(c),
                 issuer: common_name(c.issuer()).unwrap_or_else(|| c.issuer().to_string()),
@@ -249,7 +254,7 @@ pub fn examine(tls: &TlsInfo, host: &Host<String>, now: i64) -> (Tls, Vec<Findin
 /// Why the chain did not validate, told apart precisely: a missing intermediate
 /// (works in browsers that fetch it), a self-signed certificate, or an issuer
 /// that browsers do not trust. Dates and names are reported separately.
-fn trust_finding(problem: CertProblem, message: &str, chain: &[X509Certificate]) -> Option<Finding> {
+fn trust_finding(problem: CertProblem, message: &str, chain: &[&X509Certificate]) -> Option<Finding> {
     match problem {
         CertProblem::Expired | CertProblem::NotYetValid | CertProblem::NameMismatch => return None,
         CertProblem::UnknownIssuer => {}
@@ -671,6 +676,22 @@ mod tests {
             ids(&examine(&info, &host("example.com"), NOW).1),
             ["tls.version.no_tls13"]
         );
+    }
+
+    #[test]
+    fn unparsable_leaf_is_not_replaced_by_the_next_certificate() {
+        // The intermediate expired and is for another name: neither must be
+        // reported against the site when the real leaf cannot be read.
+        let other = leaf(&["other.example"], (2025, 1, 1), (2026, 1, 1), vec![1; 20]);
+        let (data, f) = examine(
+            &tls_info(vec![vec![0x30, 0x03, 0x01, 0x02, 0x03], other], Verification::Valid),
+            &host("example.com"),
+            NOW,
+        );
+        assert!(data.certificate.is_none());
+        assert!(f.is_empty(), "{:?}", ids(&f));
+        // The certificate after the leaf is still the chain, not the leaf.
+        assert_eq!(data.chain.len(), 1);
     }
 
     #[test]
