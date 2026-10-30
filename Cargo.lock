@@ -990,7 +990,7 @@ dependencies = [
 
 [[package]]
 name = "insite"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "clap",
  "flate2",
@@ -1003,7 +1003,7 @@ dependencies = [
 
 [[package]]
 name = "insite-core"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "aho-corasick",
  "brotli",
@@ -1037,7 +1037,7 @@ dependencies = [
 
 [[package]]
 name = "insite-sigc"
-version = "0.1.0-dev"
+version = "0.1.0"
 dependencies = [
  "fancy-regex",
  "regex",
