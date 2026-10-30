@@ -7,12 +7,19 @@ use insite_core::analyze::dns::DomainReport;
 use insite_core::analyze::network::{HttpsEnforcement, Network};
 use insite_core::report::{Finding, Module, Outcome, Report, Severity, Status};
 
-use crate::style::{Style, wrap_items};
+use crate::style::{Style, neutralize, wrap_items};
 
 /// Width of the section labels on the first screen.
 const LABEL: usize = 10;
 
+/// The report for a terminal. Everything a page, a DNS record or a certificate
+/// supplied is neutralized here, at the one place all of it passes through, so
+/// no title, evidence or console message can write an escape sequence.
 pub fn terminal(report: &Report, color: bool, verbose: bool, width: usize) -> String {
+    neutralize(&terminal_text(report, color, verbose, width), color)
+}
+
+fn terminal_text(report: &Report, color: bool, verbose: bool, width: usize) -> String {
     let s = Style::new(color);
     let mut out = String::new();
     let host = s.bold(&report.target.display_host);
@@ -271,6 +278,10 @@ fn metric_value(name: &str, value: f64) -> String {
 /// After a progressive fast report: the browser line, the stack as the browser
 /// completed it, and the browser's findings.
 pub fn browser_update(report: &Report, color: bool, verbose: bool, width: usize) -> String {
+    neutralize(&browser_update_text(report, color, verbose, width), color)
+}
+
+fn browser_update_text(report: &Report, color: bool, verbose: bool, width: usize) -> String {
     let s = Style::new(color);
     let mut out = String::from("\n");
     for (label, text) in summary_lines(report, &s, width) {
@@ -954,8 +965,79 @@ pub fn severity(s: Severity) -> &'static str {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use insite_core::report::{Modules, TargetInfo};
+    use std::collections::BTreeMap;
+
+    pub(crate) const HOSTILE: &str = "\x1b[2J\x1b]0;pwned\x07\u{9b}2J";
+
+    pub(crate) fn hostile_report() -> Report {
+        let mut modules = Modules {
+            network: Module::skipped("not selected"),
+            tls: Module::skipped("not selected"),
+            dns: Module::skipped("not selected"),
+            infra: Module::skipped("not selected"),
+            security: Module::skipped("not selected"),
+            stack: Module::skipped("not selected"),
+            seo: Module::skipped("not selected"),
+            weight: Module::skipped("not selected"),
+            browser: Module::skipped("not selected"),
+        };
+        modules.seo.findings.push(Finding {
+            id: "seo.title.missing",
+            severity: Severity::Medium,
+            params: BTreeMap::new(),
+            evidence: format!("<title>{HOSTILE}</title>"),
+            title: format!("Title {HOSTILE}"),
+            detail: format!("detail {HOSTILE}"),
+            fix: format!("fix {HOSTILE}"),
+        });
+        Report {
+            schema_version: "0.1.0",
+            collector_version: String::new(),
+            analyzer_version: "test",
+            target: TargetInfo {
+                input: "https://example.com/".to_owned(),
+                display_host: format!("example.com{HOSTILE}"),
+                final_url: None,
+            },
+            started_at: "2026-01-01T00:00:00Z".to_owned(),
+            duration_ms: 0.0,
+            outcome: Outcome::Partial {
+                reasons: vec![format!("reason {HOSTILE}")],
+            },
+            sources: Vec::new(),
+            phase: None,
+            modules,
+        }
+    }
+
+    #[test]
+    fn page_text_cannot_write_escape_sequences() {
+        let report = hostile_report();
+        for color in [false, true] {
+            for text in [
+                terminal(&report, color, true, 80),
+                browser_update(&report, color, true, 80),
+            ] {
+                // Style's own colours may carry an ESC; nothing else may.
+                let mut rest = text.clone();
+                for code in ["0", "1", "2", "31", "32", "33"] {
+                    rest = rest.replace(&format!("\x1b[{code}m"), "");
+                }
+                assert!(!rest.contains('\x1b'), "{text:?}");
+                assert!(
+                    !text.contains("\x1b[2J") && !text.contains("\x1b]") && !text.contains('\x07'),
+                    "{text:?}"
+                );
+                assert!(!text.contains('\u{9b}'), "{text:?}");
+            }
+        }
+        let plain = terminal(&report, false, true, 80);
+        assert!(!plain.contains('\x1b'), "{plain:?}");
+        assert!(plain.contains("example.com\u{fffd}[2J"), "{plain:?}");
+    }
 
     #[test]
     fn sizes_and_names() {

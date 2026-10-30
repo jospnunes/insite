@@ -5,9 +5,15 @@ use std::fmt::Write;
 use insite_core::report::{Finding, Outcome, Report, Severity};
 
 use crate::render::{clip, evidence_text, ms, severity, summary_lines};
-use crate::style::{Style, visible_len};
+use crate::style::{Style, neutralize, visible_len};
 
+/// The report as Markdown. Control characters from the page are neutralized, so
+/// pasting the result cannot carry an escape sequence into a terminal.
 pub fn render(report: &Report) -> String {
+    neutralize(&markdown(report), false)
+}
+
+fn markdown(report: &Report) -> String {
     let plain = Style::new(false);
     let m = &report.modules;
     let mut out = String::new();
@@ -164,6 +170,13 @@ fn capitalize(word: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn page_text_cannot_write_escape_sequences() {
+        let text = render(&crate::render::tests::hostile_report());
+        assert!(!text.chars().any(|c| c.is_control() && c != '\n'), "{text:?}");
+        assert!(text.contains('\u{fffd}'), "{text:?}");
+    }
 
     #[test]
     fn cells_are_escaped() {
