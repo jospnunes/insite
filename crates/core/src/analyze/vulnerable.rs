@@ -331,7 +331,7 @@ fn components() -> Vec<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::detect::Evidence;
+    use crate::detect::{Evidence, TechOrigin};
 
     fn v(text: &'static str) -> Version {
         Version::parse(text).unwrap()
@@ -350,6 +350,8 @@ mod tests {
                 value: format!("/js/{}-{}.min.js", name.to_lowercase(), version.unwrap_or("")),
             }],
             implied_by: None,
+            origin: TechOrigin::Page,
+            priority: 0,
         }
     }
 

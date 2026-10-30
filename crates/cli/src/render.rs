@@ -1312,7 +1312,7 @@ pub(crate) mod tests {
 
     #[test]
     fn third_party_count_says_it_comes_from_the_html_without_the_browser() {
-        let lines = summary_lines(&weight_report(None), &Style::new(false), 100);
+        let lines = summary_lines(&weight_report(None), &Style::new(false), 100, false);
         let weight = &lines.iter().find(|(l, _)| *l == "weight").unwrap().1;
         assert!(weight.contains("1 third party in the HTML"), "{weight}");
         assert!(weight.starts_with("HTML 162 KB (934 KB uncompressed)"), "{weight}");
@@ -1320,7 +1320,7 @@ pub(crate) mod tests {
 
     #[test]
     fn third_party_count_comes_from_the_browser_when_it_ran() {
-        let lines = summary_lines(&weight_report(Some(14)), &Style::new(false), 100);
+        let lines = summary_lines(&weight_report(Some(14)), &Style::new(false), 100, false);
         let weight = &lines.iter().find(|(l, _)| *l == "weight").unwrap().1;
         assert!(weight.contains("14 third parties"), "{weight}");
         assert!(!weight.contains("in the HTML"), "{weight}");
