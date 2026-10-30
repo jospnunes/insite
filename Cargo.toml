@@ -7,6 +7,7 @@ version = "0.1.0-dev"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
+repository = "https://github.com/jospnunes/insite"
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "time", "macros", "sync", "io-util", "signal"] }
@@ -48,3 +49,8 @@ panic = "unwind"
 lto = "thin"
 codegen-units = 1
 strip = true
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"

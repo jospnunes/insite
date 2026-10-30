@@ -5,6 +5,7 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
+repository.workspace = true
 
 [dependencies]
 serde.workspace = true
@@ -12,3 +13,7 @@ serde_json.workspace = true
 regex-syntax.workspace = true
 fancy-regex.workspace = true
 regex.workspace = true
+
+# A development tool: releases ship only the insite binary.
+[package.metadata.dist]
+dist = false
