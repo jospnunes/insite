@@ -1,9 +1,22 @@
 # insite
 
+[![CI](https://github.com/jospnunes/insite/actions/workflows/ci.yml/badge.svg)](https://github.com/jospnunes/insite/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Latest release](https://img.shields.io/github/v/release/jospnunes/insite)](https://github.com/jospnunes/insite/releases/latest)
+
 Full X-ray of a website from the terminal: network, TLS, DNS and e-mail,
 infrastructure, technology stack, security grade, technical SEO and page weight,
 in about a second, from a single binary. With `--browser`, also Core Web Vitals
 and the stack only JavaScript reveals.
+
+"About a second" is measured: `scripts/measure-time.py` gives a median of
+888 ms for the whole run over the 100-site reference list (`bench/sites.tsv`),
+one site at a time from a VPS in Boston, on 30 Oct 2026.
+
+Other tools cover one slice each: WhatWeb and Wappalyzer for the stack, SSL
+Labs for TLS, the MDN HTTP Observatory for headers, Lighthouse for Web Vitals.
+insite reports on all of these areas in one passive pass from the terminal
+(Web Vitals only with `--browser`). It is not a replacement for their depth.
 
 ```
 $ insite wordpress.org
@@ -29,7 +42,8 @@ weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party
 ## Principles
 
 - **Fast enough to be a selling point.** Everything that does not depend on
-  something else starts at t = 0; the report never waits past its deadline.
+  something else starts at t = 0; the report never waits past its deadline
+  (the timing method is above).
 - **Correct before fast.** No finding without evidence. What could not be
   measured is reported as not measured, never as absent: a DNS resolver that
   filters records, a bot challenge instead of the page, an error page — each is
@@ -79,6 +93,11 @@ with Rust 1.89 or newer:
 cargo install --path crates/cli
 ```
 
+**Platforms:** Linux x86_64 and aarch64 (glibc and musl), macOS (Intel and
+Apple silicon) and Windows x86_64. The minimum supported Rust version (MSRV) is
+1.89. `--browser` needs Chrome, Chromium, Edge or Brave and does not run on
+Windows yet.
+
 ## Usage
 
 ```
@@ -103,6 +122,11 @@ insite update                newest webappanalyzer signatures into the cache
       --force                download and compile even when they are up to date
       --native-roots         trust the system's certificate store for the download
 ```
+
+**Do not point it at untrusted targets from a sensitive network.** insite
+follows redirects, and the `Sitemap:` URL in `robots.txt`, to whatever address
+they point to, private addresses included. A hostile site can make it request
+an internal one.
 
 Several sites at once: `insite a.com b.com`, or a list on standard input
 (`insite < sites.txt`). Analyses of the same registrable domain run one after
@@ -145,8 +169,8 @@ AS lookups use Team Cymru's public IP-to-ASN DNS service. insite is not
 affiliated with, or endorsed by, any of these projects. `scripts/` regenerates
 the embedded data; the report lists the version of each source it used.
 
-The design, decisions and trade-offs are documented (in Portuguese) in
-[docs/arquitetura.md](docs/arquitetura.md).
+[docs/arquitetura.md](docs/arquitetura.md) is the design document, in
+Portuguese: decisions and trade-offs.
 
 ---
 
