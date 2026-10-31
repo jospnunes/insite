@@ -109,18 +109,20 @@ pub(crate) fn spawn_ui(
     let (tx, rx) = mpsc::unbounded_channel();
     let theme = Theme::detect();
     let thread = thread::spawn(move || {
-        let _ = drive(Locked, real_size, theme, rx, &inputs, selection, verbose, browser);
+        let _ = drive(Locked, real_size, TICK, theme, rx, &inputs, selection, verbose, browser);
     });
     (tx, thread)
 }
 
-/// `spawn_ui` for tests: any writer, a fixed size and the plain theme. The thread
-/// returns the writer.
+/// `spawn_ui` for tests: any writer, a fixed size, the spinners' tick and the plain theme.
+/// The thread returns the writer.
 #[cfg(test)]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn spawn_ui_with<W: Write + Send + 'static>(
     out: W,
     width: usize,
     height: usize,
+    tick: Duration,
     inputs: Vec<String>,
     selection: Selection,
     verbose: bool,
@@ -132,6 +134,7 @@ pub(crate) fn spawn_ui_with<W: Write + Send + 'static>(
         drive(
             out,
             size,
+            tick,
             Theme::plain_ascii(),
             rx,
             &inputs,
@@ -153,13 +156,14 @@ fn real_size() -> (usize, usize) {
 }
 
 /// The UI thread's loop. It sleeps until an event arrives, the channel closes or the next
-/// tick is due, so a result is drawn, and the terminal given back, at once; the tick
+/// tick (`tick` after the last) is due, so a result is drawn, and the terminal given back, at once; the tick
 /// only paces the spinners. Returns the writer when the channel closes and the terminal
 /// has been given back.
 #[allow(clippy::too_many_arguments)]
 fn drive<W: Write>(
     out: W,
     mut size: impl FnMut() -> (usize, usize),
+    tick: Duration,
     theme: Theme,
     mut rx: UnboundedReceiver<UiEvent>,
     inputs: &[String],
@@ -173,7 +177,7 @@ fn drive<W: Write>(
         .build()
         .expect("tokio runtime");
     let mut ui = Ui::new(out, theme, inputs, selection, verbose, browser);
-    let mut next_tick = Instant::now() + TICK;
+    let mut next_tick = Instant::now() + tick;
     loop {
         let wait = next_tick.saturating_duration_since(Instant::now());
         let first = waiter.block_on(async { tokio::time::timeout(wait, rx.recv()).await });
@@ -202,7 +206,7 @@ fn drive<W: Write>(
         }
         let advance = Instant::now() >= next_tick;
         if advance {
-            next_tick = Instant::now() + TICK;
+            next_tick = Instant::now() + tick;
         }
         if advance || urgent {
             let _ = ui.render(width, height, advance);
@@ -374,8 +378,7 @@ impl<W: Write> Ui<W> {
     }
 
     /// Commits what became final and redraws what is still live, one spinner frame further
-    /// when `advance`. With
-    /// nothing animating there is nothing to redraw.
+    /// when `advance`. With nothing animating there is nothing to redraw.
     fn render(&mut self, width: usize, height: usize, advance: bool) -> io::Result<()> {
         if advance {
             self.frame = self.frame.wrapping_add(1);
@@ -573,6 +576,10 @@ mod tests {
     use crate::render::tests::{full_report, hostile_report};
 
     const SHOW: &str = "\x1b[?25h";
+    /// A tick no test waits for: frames come from events and from the close.
+    const NEVER: Duration = Duration::from_secs(10);
+    /// How long a test waits for the UI before failing.
+    const PATIENCE: Duration = Duration::from_secs(2);
     const TAIL: &str = "\x1b[?25h\x1b[0m\x1b[?2026l";
 
     fn hosts(names: &[&str]) -> Vec<String> {
@@ -585,7 +592,16 @@ mod tests {
 
     /// Runs the UI over `events`, closes the channel and returns what was written.
     fn run_ui(inputs: &[&str], verbose: bool, browser: bool, events: Vec<UiEvent>) -> String {
-        let (tx, thread) = spawn_ui_with(Vec::new(), 100, 24, hosts(inputs), Selection::all(), verbose, browser);
+        let (tx, thread) = spawn_ui_with(
+            Vec::new(),
+            100,
+            24,
+            NEVER,
+            hosts(inputs),
+            Selection::all(),
+            verbose,
+            browser,
+        );
         for event in events {
             tx.send(event).unwrap();
         }
@@ -625,15 +641,29 @@ mod tests {
         }
     }
 
+    /// Polls the captured output until `done` holds, failing after `PATIENCE`.
+    fn wait_for(out: &Shared, what: &str, done: impl Fn(&str) -> bool) {
+        let started = Instant::now();
+        while !done(&out.text()) {
+            assert!(
+                started.elapsed() < PATIENCE,
+                "{what} not written in time: {}",
+                visible(&out.text())
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+    }
+
     #[test]
     fn an_idle_ui_ends_promptly_when_the_sender_drops() {
-        // Two ticks are 160 ms: ending in well under one means the thread did not sleep
-        // through a tick before noticing.
+        // The tick is 10 s: ending within PATIENCE means the thread did not sleep through
+        // the tick before noticing.
         for browser in [false, true] {
             let (tx, thread) = spawn_ui_with(
                 Vec::new(),
                 100,
                 24,
+                NEVER,
                 hosts(&["a.example", "b.example"]),
                 Selection::all(),
                 false,
@@ -642,8 +672,8 @@ mod tests {
             thread::sleep(Duration::from_millis(30));
             let dropped = Instant::now();
             drop(tx);
-            join(thread, Duration::from_secs(5));
-            assert!(dropped.elapsed() < Duration::from_millis(40), "{:?}", dropped.elapsed());
+            join(thread, PATIENCE);
+            assert!(dropped.elapsed() < PATIENCE, "{:?}", dropped.elapsed());
         }
     }
 
@@ -651,16 +681,12 @@ mod tests {
     fn a_result_is_drawn_without_waiting_for_a_tick() {
         let out = Shared::default();
         let names = hosts(&["a.example", "b.example"]);
-        let (tx, thread) = spawn_ui_with(out.clone(), 100, 24, names, Selection::all(), false, false);
-        // The first tick is 80 ms after the start; the row must be out well before it.
+        let (tx, thread) = spawn_ui_with(out.clone(), 100, 24, NEVER, names, Selection::all(), false, false);
+        // The first tick is 10 s away: the row must be out long before it.
         tx.send(full(0)).unwrap();
-        let sent = Instant::now();
-        while !visible(&out.text()).contains("a.example") {
-            assert!(sent.elapsed() < Duration::from_millis(60), "not drawn in time");
-            thread::sleep(Duration::from_millis(1));
-        }
+        wait_for(&out, "the row", |text| visible(text).contains("a.example"));
         drop(tx);
-        join(thread, Duration::from_secs(5));
+        join(thread, PATIENCE);
     }
 
     /// The text of the screen lines, without any escape sequence.
@@ -735,6 +761,7 @@ mod tests {
             out.clone(),
             100,
             24,
+            NEVER,
             hosts(&["example.com"]),
             Selection::all(),
             false,
@@ -746,11 +773,11 @@ mod tests {
             report: Box::new(fast.clone()),
         })
         .unwrap();
-        // The browser row spins for a few frames before the complete report arrives.
-        thread::sleep(Duration::from_millis(200));
+        // The browser row is on screen before the complete report arrives.
+        wait_for(&out, "the browser row", |text| text.contains("launching"));
         tx.send(full(0)).unwrap();
         drop(tx);
-        join(thread, Duration::from_secs(5));
+        join(thread, PATIENCE);
         let text = out.text();
         let frozen = site::final_lines(&fast, 100, &theme(), false);
         let hint = frozen.iter().find(|l| l.contains("-v for evidence")).unwrap();
