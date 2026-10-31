@@ -938,6 +938,43 @@ mod tests {
         assert_eq!(text[details_at..].matches(id).count(), 1, "{text}");
     }
 
+    /// How many lines are the browser details' own heading: `browser`, alone on its line.
+    fn browser_headings(text: &str) -> usize {
+        text.lines().filter(|l| l.trim() == "browser").count()
+    }
+
+    #[test]
+    fn verbose_static_output_has_the_browser_details_once() {
+        use crate::live::browser::tests::browser_report;
+        let full = browser_report();
+
+        // --from with one snapshot.
+        let saved = vec![Saved {
+            full: full.clone(),
+            browser: true,
+        }];
+        let text = visible(&saved_lines(&saved, true, 100, &theme()).join("\n"));
+        assert_eq!(browser_headings(&text), 1, "{text}");
+        assert!(text.contains("load event"), "{text}");
+
+        // The -v details of a batch.
+        let sites = [(Some(&full), Some(&full))];
+        let text = visible(&details(&sites, 100, &theme()).join("\n"));
+        assert_eq!(browser_headings(&text), 1, "{text}");
+    }
+
+    #[test]
+    fn verbose_live_run_without_a_fast_report_has_the_browser_details_once() {
+        use crate::live::browser::tests::browser_report;
+        let events = vec![UiEvent::Full {
+            site: 0,
+            report: Box::new(browser_report()),
+        }];
+        let text = visible(&run_ui(&["a.example"], true, true, events));
+        assert_eq!(browser_headings(&text), 1, "{text}");
+        assert!(text.contains("load event"), "{text}");
+    }
+
     fn insite_finding(id: &'static str, title: &str) -> insite_core::report::Finding {
         crate::render::tests::finding(id, insite_core::report::Severity::High, title)
     }

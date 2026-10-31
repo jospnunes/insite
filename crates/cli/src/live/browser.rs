@@ -73,7 +73,8 @@ impl BrowserView {
 pub(crate) enum Above<'a> {
     /// The site block above was drawn from this same report (a saved snapshot, a `-v` batch
     /// or a run whose fast report never came), so the stack and the findings are already
-    /// there and the act leaves them out.
+    /// there and the act leaves them out; with `-v` that block's details hold the browser
+    /// details too, so the act does not append them again.
     Same,
     /// The site block above was frozen from `fast`, the report before the browser: the act
     /// shows the stack as the browser completed it, and the findings that only the browser
@@ -82,7 +83,8 @@ pub(crate) enum Above<'a> {
 }
 
 /// The finished act: a pure function of the report, also for saved snapshots. Empty when
-/// the browser was not asked for; verbose appends today's browser details.
+/// the browser was not asked for. Verbose appends today's browser details after a fast
+/// report only: above the same report, the site block's own details already have them.
 pub(crate) fn final_lines(
     report: &Report,
     width: usize,
@@ -165,7 +167,7 @@ pub(crate) fn final_lines(
         findings_rows(report, width, theme, verbose, above),
         notes,
     ]);
-    if verbose {
+    if verbose && matches!(above, Above::Fast(_)) {
         lines.extend(browser_details_text(report, true, width).lines().map(str::to_owned));
     }
     lines
@@ -729,6 +731,19 @@ pub(super) mod tests {
         // Only the browser's own findings are the act's.
         assert!(text.iter().any(|l| l.contains("perf.tbt.poor")));
         assert!(!text.iter().any(|l| l.contains("stack.library")), "{text:#?}");
+    }
+
+    #[test]
+    fn verbose_details_are_not_repeated_above_the_same_report() {
+        let (fast, full) = found_by_the_browser();
+        let theme = ascii();
+        let heading = |lines: &[String]| plain(lines).iter().filter(|l| l.trim() == "browser").count();
+        // The block above was drawn from this report: its details already hold them.
+        let same = super::final_lines(&full, 100, &theme, true, Above::Same);
+        assert_eq!(heading(&same), 0, "{:#?}", plain(&same));
+        // The block above came from the fast report, which had no browser data.
+        let after_fast = super::final_lines(&full, 100, &theme, true, Above::Fast(&fast));
+        assert_eq!(heading(&after_fast), 1, "{:#?}", plain(&after_fast));
     }
 
     #[test]
