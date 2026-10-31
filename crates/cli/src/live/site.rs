@@ -8,7 +8,7 @@ use insite_core::report::{Finding, Module, ModuleName, Outcome, Report, Selectio
 use insite_core::snapshot::DomainRole;
 
 use super::theme::{Corner, Glyph, MeterColor, Theme, clean};
-use crate::render::{clip, details_text, indent, ms, severity, short_as_name, summary_lines};
+use crate::render::{clip, details_text, indent, ms, network_notes, severity, short_as_name, summary_lines};
 use crate::style::{Style, display_width, neutralize};
 
 /// Below this many columns the phase bars go away.
@@ -17,6 +17,8 @@ const COMPACT: usize = 60;
 const LABEL: usize = 8;
 /// Where a module's text starts: glyph, space, label, two spaces.
 const TEXT_AT: usize = LABEL + 4;
+/// The least time, in ms, the live bars are scaled to before the report knows the total.
+const LIVE_SCALE_FLOOR: f64 = 250.0;
 /// The findings block stops adding low findings at this many lines.
 const FINDING_LINES: usize = 8;
 
@@ -130,13 +132,17 @@ impl SiteView {
             phases,
             reused: false,
             start,
-            scale: start + phases.iter().flatten().sum::<f64>(),
+            // Provisional: what has arrived, but never under LIVE_SCALE_FLOOR, so the first
+            // bars stay small and grow in place instead of filling the row and shrinking.
+            // The report brings the real total and may still move a bar a cell or two.
+            scale: (start + phases.iter().flatten().sum::<f64>()).max(LIVE_SCALE_FLOOR),
             closing: None,
+            notes: None,
         };
         let rows = ROWS
             .iter()
             .filter(|(_, module, _)| self.selection.contains(*module))
-            .map(|(label, _, needs)| {
+            .flat_map(|(label, _, needs)| {
                 let (glyph, text) = if needs.iter().all(|p| self.done.contains(p)) {
                     (theme.dim(theme.glyph(Glyph::Neutral)), theme.dim("collected"))
                 } else {
@@ -156,7 +162,7 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
     if let Outcome::Unreachable { reason } = &report.outcome {
         let text = format!("{} unreachable: {}", theme.glyph(Glyph::Bad), safe(reason));
         head.push(format!("  {}", theme.red(&text)));
-    } else if let Some(timeline) = Timeline::of(report, theme) {
+    } else if let Some(timeline) = Timeline::of(report, width, theme) {
         network = timeline.rows(width, theme);
     }
     let mut notes = findings_block(report, width, theme, verbose);
@@ -243,21 +249,25 @@ struct Timeline {
     scale: f64,
     /// The summary line, once the report knows it.
     closing: Option<String>,
+    /// Port 80, proxy, retries and the like, on a line of their own after the closing line.
+    notes: Option<String>,
 }
 
 impl Timeline {
-    fn of(report: &Report, theme: &Theme) -> Option<Timeline> {
+    fn of(report: &Report, width: usize, theme: &Theme) -> Option<Timeline> {
         let net = report.modules.network.data.as_ref()?;
         let phases = net.phases.as_ref();
         let phases_ms = phases.map_or([None; 5], |p| {
             [p.dns_ms, p.tcp_ms, p.tls_ms, Some(p.ttfb_ms), Some(p.download_ms)]
         });
         let start = net.redirects_ms;
+        // A compact line keeps the protocol and IPv6; the address and the AS are too wide.
+        let compact = width < COMPACT;
         let facts = [
             net.protocol.map(str::to_owned),
             net.ipv6.map(|v6| if v6 { "IPv6" } else { "no IPv6" }.to_owned()),
-            net.peer.clone(),
-            report.modules.infra.data.as_ref().and_then(|i| {
+            net.peer.clone().filter(|_| !compact),
+            report.modules.infra.data.as_ref().filter(|_| !compact).and_then(|i| {
                 let name = i.hosting.clone().or_else(|| i.as_name.as_deref().map(short_as_name))?;
                 Some(i.asn.map_or(name.clone(), |asn| format!("AS{asn} {name}")))
             }),
@@ -285,6 +295,8 @@ impl Timeline {
                 theme.dim(&format!("· {}", facts.join(" · ")))
             )),
         };
+        let notes = network_notes(net, &Style::new(true));
+        let notes = (!notes.is_empty()).then(|| neutralize(&notes.join(" · "), true).replace('\n', " "));
         Some(Timeline {
             hops: net
                 .redirects
@@ -301,6 +313,7 @@ impl Timeline {
             start,
             scale: net.total_ms.unwrap_or(start + phases_ms.iter().flatten().sum::<f64>()),
             closing,
+            notes,
         })
     }
 
@@ -331,7 +344,8 @@ impl Timeline {
         let closing = self.closing.is_some();
         rows.extend(self.closing.clone());
         let last = rows.len().saturating_sub(1);
-        rows.iter()
+        let mut framed: Vec<String> = rows
+            .iter()
             .enumerate()
             .map(|(i, row)| {
                 if compact {
@@ -344,7 +358,14 @@ impl Timeline {
                 };
                 format!("  {} {row}", theme.dim(corner))
             })
-            .collect()
+            .collect();
+        // Under the frame, in the headline's wording and colors.
+        framed.extend(
+            self.notes
+                .as_ref()
+                .map(|n| format!("{}{n}", " ".repeat(if compact { 2 } else { 4 }))),
+        );
+        framed
     }
 
     fn phase_rows(&self, width: usize, theme: &Theme, rows: &mut Vec<String>) {
@@ -361,7 +382,8 @@ impl Timeline {
                 4 => theme.green(text),
                 _ => theme.cyan(text),
             };
-            let mut bar = theme.bar(took / scale * area as f64);
+            // Capped to the row: a saved snapshot can hold phases longer than its total.
+            let mut bar = theme.bar((took / scale * area as f64).min(area as f64));
             if bar.is_empty() && took > 0.0 {
                 // Never an empty bar for time that passed: the smallest visible cell.
                 bar = theme.bar(if theme.unicode { 0.125 } else { 1.0 });
@@ -409,7 +431,8 @@ fn short_url(url: &str, cols: usize, theme: &Theme) -> String {
     fit(url.trim_end_matches('/'), cols, theme)
 }
 
-fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> String {
+/// The row for a module; a summary that wrapped continues on rows of its own, under the text.
+fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> Vec<String> {
     let mut parts = text.split('\n');
     let first = format!(
         "{glyph} {}  {}",
@@ -417,7 +440,7 @@ fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> String {
         parts.next().unwrap_or("")
     );
     let rest = parts.map(|p| format!("{}{}", " ".repeat(TEXT_AT), p.trim_start()));
-    std::iter::once(first).chain(rest).collect::<Vec<_>>().join("\n")
+    std::iter::once(first).chain(rest).collect()
 }
 
 /// How a module ended, from its status and its worst finding.
@@ -470,7 +493,7 @@ fn final_rows(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Ve
             Some(grade) => grade,
             None => neutralize(text, true),
         };
-        rows.push(module_row(theme, &glyph, label, &text));
+        rows.extend(module_row(theme, &glyph, label, &text));
     }
     rows
 }
@@ -520,17 +543,21 @@ fn all_findings(report: &Report) -> Vec<&Finding> {
     all
 }
 
+/// How many of the sorted findings the block shows.
+fn shown_count(all: &[&Finding], verbose: bool) -> usize {
+    if verbose {
+        return all.len();
+    }
+    let medium_up = all.iter().filter(|f| f.severity >= Severity::Medium).count();
+    let lows = all.iter().filter(|f| f.severity == Severity::Low).count();
+    medium_up + lows.min(FINDING_LINES.saturating_sub(medium_up))
+}
+
 /// "N things to look at": medium and above always, then low ones up to a screenful.
 /// Verbose shows everything, with each finding's detail, fix and evidence.
 fn findings_block(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Vec<String> {
     let all = all_findings(report);
-    let shown = if verbose {
-        all.len()
-    } else {
-        let medium_up = all.iter().filter(|f| f.severity >= Severity::Medium).count();
-        let lows = all.iter().filter(|f| f.severity == Severity::Low).count();
-        medium_up + lows.min(FINDING_LINES.saturating_sub(medium_up))
-    };
+    let shown = shown_count(&all, verbose);
     let mut out = Vec::new();
     if shown > 0 {
         out.push(format!(
@@ -584,7 +611,9 @@ fn findings_block(report: &Report, width: usize, theme: &Theme, verbose: bool) -
 
 /// The next command to try.
 fn hint(report: &Report, verbose: bool, theme: &Theme) -> Vec<String> {
-    let first = all_findings(report).first().map(|f| f.id);
+    // The first one the block shows: a hidden (info) finding is not worth an `explain`.
+    let all = all_findings(report);
+    let first = all.first().filter(|_| shown_count(&all, verbose) > 0).map(|f| f.id);
     let mut parts = Vec::new();
     parts.extend(first.map(|id| format!("insite explain {id}")));
     if !verbose {
@@ -1055,5 +1084,135 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn wrapped_summaries_become_separate_lines() {
+        use crate::stackview::tests::tech;
+        use insite_core::detect::TechOrigin;
+        let names = [
+            "WordPress",
+            "WooCommerce",
+            "Elementor",
+            "Yoast SEO",
+            "Google Analytics",
+            "Google Tag Manager",
+            "Cloudflare",
+            "Bootstrap",
+            "jQuery",
+            "Font Awesome",
+            "Hotjar",
+            "Mailchimp",
+        ];
+        let mut technologies: Vec<_> = names.iter().map(|n| tech(n, 8, TechOrigin::Page)).collect();
+        technologies.extend(names.iter().map(|n| tech(&format!("{n} service"), 9, TechOrigin::Dns)));
+        let mut report = full_report();
+        report.modules.stack.data.as_mut().unwrap().technologies = technologies;
+        for verbose in [false, true] {
+            let lines = final_lines(&report, 60, &ascii(), verbose);
+            assert!(lines.iter().all(|l| !l.contains('\n')), "{lines:#?}");
+            let text = plain(&lines);
+            let stack = text.iter().position(|l| l.starts_with("+ stack")).unwrap();
+            // The wrapped rest sits under the text column, one element per screen row.
+            assert!(text[stack + 1].starts_with(&" ".repeat(TEXT_AT)), "{text:#?}");
+            assert!(!text[stack + 1].trim().is_empty());
+        }
+        let mut view = SiteView::new("example.com", Selection::all());
+        view.on_report(&report);
+        assert!(view.frame(0, 60, &ascii()).iter().all(|l| !l.contains('\n')));
+    }
+
+    #[test]
+    fn the_headline_facts_are_not_dropped() {
+        use insite_core::analyze::network::HttpsEnforcement;
+        let mut report = full_report();
+        let net = report.modules.network.data.as_mut().unwrap();
+        net.https = HttpsEnforcement::ServesHttp;
+        net.proxy = Some(format!("proxy.example:3128{HOSTILE}"));
+        net.retries = 2;
+        net.phases.as_mut().unwrap().dns_ms = None;
+        net.dns_source = Some("system");
+        let theme = Theme {
+            truecolor: true,
+            unicode: true,
+        };
+        let lines = final_lines(&report, 100, &theme, false);
+        every_escape_is_sgr(&lines.join("\n"));
+        let text = plain(&lines);
+        let closing = text.iter().position(|l| l.contains("328 ms")).unwrap();
+        assert_eq!(
+            text[closing + 1].trim(),
+            "dns by system · via proxy proxy.example:3128\u{fffd}[2J\u{fffd}]0;pwned\u{fffd}\u{fffd}2J · HTTP not redirected · 2 network retries",
+        );
+        // The wording and color are the headline's.
+        assert!(lines[closing + 1].contains("\x1b[33mHTTP not redirected\x1b[0m"));
+        // The calm default state still says it, and nothing else.
+        let calm = plain(&final_lines(&full_report(), 100, &ascii(), false));
+        let at = calm.iter().position(|l| l.contains("328 ms")).unwrap();
+        assert_eq!(calm[at + 1].trim(), "HTTPS enforced");
+        net_https(&mut report, HttpsEnforcement::NotChecked);
+        report.modules.network.data.as_mut().unwrap().retries = 0;
+        report.modules.network.data.as_mut().unwrap().proxy = None;
+        report.modules.network.data.as_mut().unwrap().dns_source = None;
+        let bare = plain(&final_lines(&report, 100, &ascii(), false));
+        assert!(bare[bare.iter().position(|l| l.contains("328 ms")).unwrap() + 1].is_empty());
+    }
+
+    fn net_https(report: &mut Report, https: insite_core::analyze::network::HttpsEnforcement) {
+        report.modules.network.data.as_mut().unwrap().https = https;
+    }
+
+    #[test]
+    fn the_first_live_bars_stay_small() {
+        let mut view = SiteView::new("example.com", Selection::all());
+        view.on_progress(&phase(0, Phase::Dns, 7));
+        let width_of = |view: &SiteView| {
+            strip(phase_row(&view.frame(0, 100, &ascii()), "dns").unwrap())
+                .matches('#')
+                .count()
+        };
+        let first = width_of(&view);
+        assert!(first <= 3, "{first}");
+        view.on_progress(&phase(0, Phase::Tcp, 13));
+        // The dns bar did not move or shrink when the next phase arrived.
+        assert_eq!(width_of(&view), first);
+    }
+
+    #[test]
+    fn bars_never_overflow_the_row() {
+        let mut report = full_report();
+        report.modules.network.data.as_mut().unwrap().total_ms = Some(10.0);
+        for theme in [
+            ascii(),
+            Theme {
+                truecolor: false,
+                unicode: true,
+            },
+        ] {
+            for line in final_lines(&report, 100, &theme, false) {
+                assert!(display_width(&line) < 100, "{:?}", strip(&line));
+            }
+        }
+    }
+
+    #[test]
+    fn the_hint_never_names_a_hidden_finding() {
+        let mut report = full_report();
+        report.modules.security.findings = vec![finding("sec.info.only", Severity::Info, "Just so you know")];
+        report.modules.weight.findings.clear();
+        let text = plain(&final_lines(&report, 100, &ascii(), false));
+        assert!(!text.iter().any(|l| l.contains("sec.info.only")), "{text:#?}");
+        assert!(text.last().unwrap().contains("-v for evidence"));
+        // Verbose shows it, so the hint may name it.
+        let verbose = plain(&final_lines(&report, 100, &ascii(), true));
+        assert!(verbose.iter().any(|l| l.contains("insite explain sec.info.only")));
+    }
+
+    #[test]
+    fn a_compact_closing_line_drops_the_address_and_the_as() {
+        let text = plain(&final_lines(&full_report(), 50, &ascii(), false));
+        let closing = text.iter().find(|l| l.contains("328 ms")).unwrap();
+        assert!(closing.contains("HTTP/2") && closing.contains("IPv6"));
+        assert!(!closing.contains("2606") && !closing.contains("AS13335"), "{closing}");
     }
 }

@@ -473,24 +473,46 @@ fn headline(out: &mut String, s: &Style, host: &str, net: &Network, report: &Rep
     if let Some(v6) = net.ipv6 {
         facts.push(format!("IPv6 {}", if v6 { "yes" } else { "no" }));
     }
-    match net.https {
-        HttpsEnforcement::Redirects => facts.push("HTTPS enforced".to_owned()),
-        HttpsEnforcement::NoHttpListener => facts.push("HTTPS only".to_owned()),
-        HttpsEnforcement::ServesHttp => facts.push(s.yellow("HTTP not redirected")),
-        HttpsEnforcement::RedirectsToHttp => facts.push(s.yellow("port 80 redirects to HTTP")),
-        HttpsEnforcement::HttpsUnavailable => facts.push(s.red("no HTTPS")),
-        HttpsEnforcement::NotChecked => {}
-    }
-    if net.retries > 0 {
-        facts.push(format!(
-            "{} network retr{}",
-            net.retries,
-            if net.retries == 1 { "y" } else { "ies" }
-        ));
-    }
+    facts.extend(https_fact(net.https, s));
+    facts.extend(retries_fact(net.retries));
     if !facts.is_empty() {
         let _ = writeln!(out, "  {}", facts.join(" · "));
     }
+}
+
+/// What the headline says about port 80.
+fn https_fact(https: HttpsEnforcement, s: &Style) -> Option<String> {
+    match https {
+        HttpsEnforcement::Redirects => Some("HTTPS enforced".to_owned()),
+        HttpsEnforcement::NoHttpListener => Some("HTTPS only".to_owned()),
+        HttpsEnforcement::ServesHttp => Some(s.yellow("HTTP not redirected")),
+        HttpsEnforcement::RedirectsToHttp => Some(s.yellow("port 80 redirects to HTTP")),
+        HttpsEnforcement::HttpsUnavailable => Some(s.red("no HTTPS")),
+        HttpsEnforcement::NotChecked => None,
+    }
+}
+
+fn retries_fact(retries: u32) -> Option<String> {
+    (retries > 0).then(|| format!("{retries} network retr{}", if retries == 1 { "y" } else { "ies" }))
+}
+
+/// The headline facts the live view has no place for elsewhere (it draws the protocol,
+/// IP, IPv6 and AS itself), in the headline's wording: dns by system, proxy, port 80, retries.
+pub(crate) fn network_notes(net: &Network, s: &Style) -> Vec<String> {
+    let mut notes = Vec::new();
+    if let Some(p) = &net.phases
+        && p.dns_ms.is_none()
+        && net.dns_source == Some("system")
+        && !p.connection_reused
+    {
+        notes.push("dns by system".to_owned());
+    }
+    if let Some(proxy) = &net.proxy {
+        notes.push(format!("via proxy {proxy}"));
+    }
+    notes.extend(https_fact(net.https, s));
+    notes.extend(retries_fact(net.retries));
+    notes
 }
 
 /// `CLOUDFLARENET, US` reads as `CLOUDFLARENET`.
