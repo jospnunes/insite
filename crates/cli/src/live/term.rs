@@ -4,12 +4,12 @@ use std::io::{self, Write};
 
 use crossterm::{cursor, queue, style, terminal};
 
-use crate::style::visible_len;
+use crate::style::{char_width, display_width};
 
-/// Clips `line` to `width` visible columns without cutting inside an escape sequence;
+/// Clips `line` to `width` screen columns (wide characters take two) without cutting inside an escape sequence;
 /// a reset is appended only when something was cut, so colors do not leak past the line.
 pub(crate) fn clip(line: &str, width: usize) -> String {
-    let mut visible = 0;
+    let mut columns = 0;
     let mut escape = false;
     for (i, c) in line.char_indices() {
         match (escape, c) {
@@ -17,17 +17,19 @@ pub(crate) fn clip(line: &str, width: usize) -> String {
             (true, 'm') => escape = false,
             (true, _) => {}
             (false, _) => {
-                if visible == width {
+                // A wide character that does not fit is left out whole.
+                let w = char_width(c);
+                if columns + w > width {
                     return format!("{}\x1b[0m", &line[..i]);
                 }
-                visible += 1;
+                columns += w;
             }
         }
     }
     line.to_owned()
 }
 
-/// Rows the terminal uses for a line of `len` visible columns at `width` columns.
+/// Rows the terminal uses for a line of `len` screen columns at `width` columns.
 fn rows(len: usize, width: usize) -> usize {
     len.div_ceil(width.max(1)).max(1)
 }
@@ -35,7 +37,7 @@ fn rows(len: usize, width: usize) -> usize {
 /// The lines last drawn at the bottom of the terminal, redrawn in place on every frame.
 pub(crate) struct Region<W: Write> {
     out: W,
-    /// Visible length of each line written by the last `draw`.
+    /// Screen columns of each line written by the last `draw`.
     drawn: Vec<usize>,
     /// Terminal width at the last `draw`.
     drawn_width: usize,
@@ -55,7 +57,7 @@ impl<W: Write> Region<W> {
     /// Replaces the live area with `lines`.
     pub(crate) fn draw(&mut self, lines: &[String], width: usize) -> io::Result<()> {
         let mut buf = self.begin_frame(width, !self.hidden)?;
-        let drawn = write_lines(&mut buf, lines, width)?;
+        let drawn = write_lines(&mut buf, lines, Some(width.saturating_sub(1)))?;
         self.send(buf)?;
         self.hidden = true;
         self.drawn = drawn;
@@ -64,9 +66,11 @@ impl<W: Write> Region<W> {
     }
 
     /// Clears the live area and writes `lines` as permanent text; nothing is left to redraw.
+    /// The lines are not clipped: they stay in the scrollback to scroll and copy, and the
+    /// terminal may wrap them since they are never redrawn.
     pub(crate) fn commit(&mut self, lines: &[String], width: usize) -> io::Result<()> {
         let mut buf = self.begin_frame(width, false)?;
-        write_lines(&mut buf, lines, width)?;
+        write_lines(&mut buf, lines, None)?;
         self.send(buf)?;
         self.drawn.clear();
         Ok(())
@@ -125,33 +129,43 @@ impl<W: Write> Region<W> {
     }
 }
 
-/// Writes each line clipped to leave the last column free (so the terminal never wraps),
-/// and returns the visible length of what was written.
-fn write_lines(buf: &mut Vec<u8>, lines: &[String], width: usize) -> io::Result<Vec<usize>> {
+/// Writes each line, clipped to `limit` columns if given (so the terminal never wraps),
+/// and returns the screen columns of what was written.
+fn write_lines(buf: &mut Vec<u8>, lines: &[String], limit: Option<usize>) -> io::Result<Vec<usize>> {
     let mut lens = Vec::with_capacity(lines.len());
     for line in lines {
-        let line = clip(line, width.saturating_sub(1));
-        lens.push(visible_len(&line));
+        let line = match limit {
+            Some(limit) => clip(line, limit),
+            None => line.clone(),
+        };
+        lens.push(display_width(&line));
         queue!(buf, style::Print(line), style::Print("\r\n"))?;
     }
     Ok(lens)
 }
 
-/// Shows the cursor and resets colors on stdout, ignoring errors: for the second Ctrl-C
-/// and for panics, when the region can no longer be finished properly.
+/// Shows the cursor, resets colors and ends a synchronized update on stdout, ignoring
+/// errors: for the second Ctrl-C and for panics, when the region can no longer be
+/// finished properly (it may have died between the begin and the end of a frame).
 pub(crate) fn restore_terminal() {
     let mut out = io::stdout().lock();
     let _ = write_restore(&mut out);
 }
 
 fn write_restore(out: &mut impl Write) -> io::Result<()> {
-    queue!(out, cursor::Show, style::SetAttribute(style::Attribute::Reset))?;
+    queue!(
+        out,
+        cursor::Show,
+        style::SetAttribute(style::Attribute::Reset),
+        terminal::EndSynchronizedUpdate
+    )?;
     out.flush()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::visible_len;
 
     const BEGIN: &str = "\x1b[?2026h";
     const END: &str = "\x1b[?2026l";
@@ -167,6 +181,14 @@ mod tests {
 
     fn text(region: &Region<Vec<u8>>) -> String {
         String::from_utf8(region.written().clone()).unwrap()
+    }
+
+    /// Whether `out` has a CSI cursor-up sequence (`ESC [ digits A`).
+    fn has_cursor_up(out: &str) -> bool {
+        out.split("\x1b[").skip(1).any(|rest| {
+            let digits = rest.chars().take_while(char::is_ascii_digit).count();
+            rest[digits..].starts_with('A')
+        })
     }
 
     #[test]
@@ -229,6 +251,44 @@ mod tests {
     }
 
     #[test]
+    fn commit_keeps_long_lines_whole() {
+        let long = "x".repeat(200);
+        let mut r = Region::new(Vec::new());
+        r.commit(std::slice::from_ref(&long), 40).unwrap();
+        assert!(text(&r).contains(&format!("{long}\r\n")));
+        // And the next draw does not move up over them.
+        let before = text(&r).len();
+        r.draw(&lines(&["a"]), 40).unwrap();
+        assert!(!has_cursor_up(&text(&r)[before..]));
+    }
+
+    #[test]
+    fn clip_counts_wide_chars_as_two() {
+        // 日 and 本 take 4 columns; 語 would end at column 6, past the limit of 5.
+        let clipped = clip("日本語", 5);
+        assert_eq!(clipped, "日本\x1b[0m");
+        assert_eq!(display_width(&clipped), 4);
+        assert_eq!(clip("日本語", 6), "日本語");
+        assert_eq!(clip("日本語", 1), "\x1b[0m");
+        assert_eq!(clip("a🚀b", 2), "a\x1b[0m");
+    }
+
+    #[test]
+    fn wide_lines_count_their_real_rows() {
+        // 30 wide characters are 60 columns: two rows once the terminal is 40 wide.
+        let wide = "日".repeat(30);
+        let mut r = Region::new(Vec::new());
+        r.draw(&[wide], 100).unwrap();
+        let first = text(&r).len();
+        r.draw(&lines(&["a"]), 40).unwrap();
+        assert!(text(&r)[first..].starts_with(&format!("{BEGIN}\x1b[2A{COLUMN0}{CLEAR}")));
+        // A wide line is clipped by columns, not by characters.
+        let mut r = Region::new(Vec::new());
+        r.draw(&["日".repeat(30)], 41).unwrap();
+        assert!(text(&r).contains(&format!("{}{RESET}", "日".repeat(20))));
+    }
+
+    #[test]
     fn clip_keeps_escapes_whole() {
         let colored = "\x1b[1;38;2;1;2;3mhello\x1b[0m \x1b[32mworld\x1b[0m";
         for width in 0..=visible_len(colored) + 2 {
@@ -272,7 +332,7 @@ mod tests {
     fn restore_bytes() {
         let mut out = Vec::new();
         write_restore(&mut out).unwrap();
-        assert_eq!(String::from_utf8(out).unwrap(), format!("{SHOW}{RESET}"));
+        assert_eq!(String::from_utf8(out).unwrap(), format!("{SHOW}{RESET}{END}"));
     }
 
     #[test]
@@ -304,8 +364,7 @@ mod tests {
         r.commit(&lines(&["a"]), 100).unwrap();
         r.draw(&[], 100).unwrap();
         let out = String::from_utf8(r.finish().unwrap()).unwrap();
-        // No cursor-up sequence at all (the only uppercase `A` would end one).
-        assert!(!out.contains('A'), "{out:?}");
+        assert!(!has_cursor_up(&out), "{out:?}");
     }
 
     #[test]

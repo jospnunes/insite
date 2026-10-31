@@ -127,6 +127,47 @@ pub fn visible_len(text: &str) -> usize {
     len
 }
 
+/// Terminal columns one character takes: 2 for East Asian wide and emoji, 0 for combining
+/// marks and zero-width characters, 1 for the rest. A small table, not the full Unicode one.
+pub fn char_width(c: char) -> usize {
+    match c as u32 {
+        0x0300..=0x036F | 0x200B..=0x200F | 0xFE00..=0xFE0F => 0,
+        0x1100..=0x115F
+        | 0x2E80..=0x303E
+        | 0x3041..=0x33FF
+        | 0x3400..=0x4DBF
+        | 0x4E00..=0x9FFF
+        | 0xA000..=0xA4CF
+        | 0xAC00..=0xD7A3
+        | 0xF900..=0xFAFF
+        | 0xFE30..=0xFE4F
+        | 0xFF00..=0xFF60
+        | 0xFFE0..=0xFFE6
+        | 0x1F300..=0x1F64F
+        | 0x1F680..=0x1F6FF
+        | 0x1F900..=0x1F9FF
+        | 0x20000..=0x2FFFD
+        | 0x30000..=0x3FFFD => 2,
+        _ => 1,
+    }
+}
+
+/// Columns on screen, not counting ANSI escapes: like `visible_len`, but wide characters
+/// take two columns and combining marks none.
+pub fn display_width(text: &str) -> usize {
+    let mut width = 0;
+    let mut escape = false;
+    for c in text.chars() {
+        match (escape, c) {
+            (false, '\x1b') => escape = true,
+            (true, 'm') => escape = false,
+            (true, _) => {}
+            (false, _) => width += char_width(c),
+        }
+    }
+    width
+}
+
 /// Joins `items` with `separator`, wrapping to `width` with `indent` spaces
 /// before continuation lines.
 pub fn wrap_items(items: &[String], separator: &str, width: usize, indent: usize) -> String {
@@ -158,6 +199,22 @@ mod tests {
     fn escapes_do_not_count() {
         assert_eq!(visible_len("\x1b[1mbold\x1b[0m"), 4);
         assert_eq!(visible_len("ação"), 4);
+    }
+
+    #[test]
+    fn display_width_counts_columns() {
+        assert_eq!(display_width("abc"), 3);
+        assert_eq!(display_width("ação"), 4);
+        assert_eq!(display_width("日本語"), 6);
+        assert_eq!(display_width("\x1b[31m日本\x1b[0m!"), 5);
+        assert_eq!(display_width("🚀"), 2);
+        assert_eq!(display_width("한글"), 4);
+        assert_eq!(display_width("Ａ"), 2);
+        assert_eq!(display_width("e\u{301}"), 1);
+        assert_eq!(display_width("a\u{200b}b"), 2);
+        assert_eq!(display_width(""), 0);
+        // Unchanged: the plain renderer still counts characters.
+        assert_eq!(visible_len("日本語"), 3);
     }
 
     #[test]
