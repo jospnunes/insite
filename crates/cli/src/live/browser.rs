@@ -5,9 +5,9 @@ use insite_core::analyze::browser::{Metric, TypeTotal};
 use insite_core::collect::progress::BrowserStage;
 use insite_core::report::{Report, Severity, Status};
 
-use super::site::{COMPACT, TEXT_AT, fit, join_sections, mark, mark_glyph, module_row, safe};
+use super::site::{COMPACT, TEXT_AT, finding_line, fit, join_sections, mark, mark_glyph, module_row, safe, title_room};
 use super::theme::{Glyph, MeterColor, Theme};
-use crate::render::{browser_details_text, bytes, metric_value, severity, summary_lines};
+use crate::render::{browser_details_text, bytes, metric_value, summary_lines};
 use crate::style::{Style, display_width, neutralize};
 
 /// The least and the most cells the stacked bar gets.
@@ -15,7 +15,7 @@ const MIN_BAR: usize = 10;
 const MAX_BAR: usize = 40;
 
 /// A painter from the theme: `Theme::cyan` and the like.
-type Paint = fn(&Theme, &str) -> String;
+pub(super) type Paint = fn(&Theme, &str) -> String;
 
 /// The weight groups in bar order: the name and the color of its segment.
 const KINDS: [(&str, Paint); 5] = [
@@ -169,13 +169,18 @@ fn poor_threshold(name: &str) -> Option<f64> {
     }
 }
 
-/// `LCP  ██████░░░░  1.9 s  good`, the meter in the rating's color.
-fn vital_row(m: &Metric, value_width: usize, width: usize, theme: &Theme) -> String {
-    let (label, paint, color): (_, Paint, _) = match m.rating {
+/// A Lighthouse rating as its label, painter and meter color.
+pub(super) fn rating(rating: &str) -> (&'static str, Paint, MeterColor) {
+    match rating {
         "good" => ("good", Theme::green, MeterColor::Good),
         "needs_improvement" => ("needs work", Theme::yellow, MeterColor::Warn),
         _ => ("poor", Theme::red, MeterColor::Poor),
-    };
+    }
+}
+
+/// `LCP  ██████░░░░  1.9 s  good`, the meter in the rating's color.
+fn vital_row(m: &Metric, value_width: usize, width: usize, theme: &Theme) -> String {
+    let (label, paint, color) = rating(m.rating);
     let fraction = poor_threshold(m.name).map_or(0.0, |poor| m.value / poor);
     let value = format!("{:<value_width$}", metric_value(m.name, m.value));
     format!(
@@ -337,34 +342,18 @@ fn findings_rows(report: &Report, width: usize, theme: &Theme, verbose: bool) ->
         .filter(|f| verbose || f.severity > Severity::Info)
         .collect();
     let id_width = shown.iter().map(|f| f.id.len()).max().unwrap_or(0);
-    // Indent, glyph, severity, two gaps; then the title, two spaces and the id.
-    let title_room = width
-        .saturating_sub(if width < COMPACT { 15 } else { 17 + id_width })
-        .max(10);
-    let titles: Vec<String> = shown.iter().map(|f| fit(&safe(&f.title), title_room, theme)).collect();
+    let room = title_room(width, id_width);
+    let titles: Vec<String> = shown.iter().map(|f| fit(&safe(&f.title), room, theme)).collect();
     let longest = titles.iter().map(|t| display_width(t)).max().unwrap_or(0);
     shown
         .iter()
         .zip(&titles)
-        .map(|(f, title)| {
-            let (glyph, paint): (_, Paint) = match f.severity {
-                Severity::High | Severity::Critical => (Glyph::Bad, Theme::red),
-                Severity::Medium => (Glyph::Warn, Theme::yellow),
-                _ => (Glyph::Neutral, Theme::dim),
-            };
-            let label = paint(theme, &format!("{} {:<8}", theme.glyph(glyph), severity(f.severity)));
-            if width < COMPACT {
-                format!("  {label}  {title}")
-            } else {
-                let pad = " ".repeat(longest.saturating_sub(display_width(title)));
-                format!("  {label}  {title}{pad}  {}", theme.dim(f.id))
-            }
-        })
+        .map(|(f, title)| finding_line(f.severity, f.id, title, longest, width, theme))
         .collect()
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use insite_core::analyze::browser::{Browser, Metric, TypeTotal};
     use insite_core::report::{Finding, Module, Severity, Status};
 
@@ -437,7 +426,7 @@ mod tests {
         }
     }
 
-    fn browser_report() -> Report {
+    pub(in crate::live) fn browser_report() -> Report {
         with_browser(ok(browser()))
     }
 

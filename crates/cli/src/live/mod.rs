@@ -1,6 +1,7 @@
 // The CLI wiring comes later, so nothing uses this module yet.
 #![allow(dead_code)]
 
+pub(crate) mod batch;
 pub(crate) mod browser;
 pub(crate) mod site;
 pub(crate) mod term;

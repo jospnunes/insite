@@ -66,10 +66,8 @@ pub(crate) struct SiteView {
 
 impl SiteView {
     pub(crate) fn new(input: &str, selection: Selection) -> Self {
-        let host = input.split_once("://").map_or(input, |(_, rest)| rest);
-        let host = host.split(['/', '?', '#']).next().unwrap_or(host);
         SiteView {
-            host: safe(host),
+            host: host_of(input),
             selection,
             hops: BTreeMap::new(),
             phases: BTreeMap::new(),
@@ -183,6 +181,12 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
         lines.extend(details_text(report, true, width).lines().map(str::to_owned));
     }
     lines
+}
+
+/// The host part of an input (no scheme, path, query or fragment), clean and on one line.
+pub(super) fn host_of(input: &str) -> String {
+    let host = input.split_once("://").map_or(input, |(_, rest)| rest);
+    safe(host.split(['/', '?', '#']).next().unwrap_or(host))
 }
 
 /// Page-controlled text that is safe to color and stays on one line.
@@ -531,7 +535,7 @@ fn graded(report: &Report, label: &str, width: usize, theme: &Theme) -> Option<S
     ))
 }
 
-fn all_findings(report: &Report) -> Vec<&Finding> {
+pub(super) fn all_findings(report: &Report) -> Vec<&Finding> {
     let m = &report.modules;
     let mut all: Vec<&Finding> = [
         &m.network.findings,
@@ -560,6 +564,38 @@ fn shown_count(all: &[&Finding], verbose: bool) -> usize {
     medium_up + lows.min(FINDING_LINES.saturating_sub(medium_up))
 }
 
+/// Columns left for a finding's title: the frame's 14 columns (indent, glyph, label, gap),
+/// then the title, two spaces and the id.
+pub(super) fn title_room(width: usize, id_width: usize) -> usize {
+    width
+        .saturating_sub(if width < COMPACT { 15 } else { 17 + id_width })
+        .max(10)
+}
+
+/// One finding: glyph and severity, the title padded to `longest`, and the id (not in a
+/// compact line). The title is already clean and fitted.
+pub(super) fn finding_line(
+    level: Severity,
+    id: &str,
+    title: &str,
+    longest: usize,
+    width: usize,
+    theme: &Theme,
+) -> String {
+    let (glyph, paint): (_, fn(&Theme, &str) -> String) = match level {
+        Severity::High | Severity::Critical => (Glyph::Bad, Theme::red),
+        Severity::Medium => (Glyph::Warn, Theme::yellow),
+        _ => (Glyph::Neutral, Theme::dim),
+    };
+    let label = paint(theme, &format!("{} {:<LABEL$}", theme.glyph(glyph), severity(level)));
+    if width < COMPACT {
+        format!("  {label}  {title}")
+    } else {
+        let pad = " ".repeat(longest.saturating_sub(display_width(title)));
+        format!("  {label}  {title}{pad}  {}", theme.dim(id))
+    }
+}
+
 /// "N things to look at": medium and above always, then low ones up to a screenful.
 /// Verbose shows everything, with each finding's detail, fix and evidence.
 fn findings_block(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Vec<String> {
@@ -576,29 +612,12 @@ fn findings_block(report: &Report, width: usize, theme: &Theme, verbose: bool) -
         ));
     }
     let id_width = all[..shown].iter().map(|f| f.id.len()).max().unwrap_or(0);
-    // The frame's 14 columns (indent, glyph, label, gap), then the title, two spaces, the id.
-    let title_room = width
-        .saturating_sub(if width < COMPACT { 15 } else { 17 + id_width })
-        .max(10);
+    let room = title_room(width, id_width);
     let titles: Vec<String> = all[..shown].iter().map(|f| safe(&f.title)).collect();
-    let longest = titles.iter().map(|t| display_width(t)).max().unwrap_or(0);
+    let longest = titles.iter().map(|t| display_width(t)).max().unwrap_or(0).min(room);
     for (f, title) in all.iter().zip(&titles) {
-        let (glyph, paint): (_, fn(&Theme, &str) -> String) = match f.severity {
-            Severity::High | Severity::Critical => (Glyph::Bad, Theme::red),
-            Severity::Medium => (Glyph::Warn, Theme::yellow),
-            _ => (Glyph::Neutral, Theme::dim),
-        };
-        let label = paint(
-            theme,
-            &format!("{} {:<LABEL$}", theme.glyph(glyph), severity(f.severity)),
-        );
-        let title = fit(title, title_room, theme);
-        if width < COMPACT {
-            out.push(format!("  {label}  {title}"));
-        } else {
-            let pad = " ".repeat(longest.min(title_room).saturating_sub(display_width(&title)));
-            out.push(format!("  {label}  {title}{pad}  {}", theme.dim(f.id)));
-        }
+        let title = fit(title, room, theme);
+        out.push(finding_line(f.severity, f.id, &title, longest, width, theme));
         if verbose {
             let evidence = clip(&f.evidence, 300);
             for (prefix, text) in [("", &f.detail), ("fix: ", &f.fix), ("evidence: ", &evidence)] {
