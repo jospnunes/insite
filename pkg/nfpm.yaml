@@ -1,0 +1,29 @@
+# nfpm manifest for the .deb and .rpm packages. pkg/build-packages.sh sets
+# ARCH (nfpm name), VERSION and BIN in the environment before each run.
+name: insite
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+release: 1
+maintainer: José Pedro Pereira <contato@synthsolutions.com.br>
+description: "Full X-ray of a website from the terminal: network, TLS, DNS, stack, security, SEO and weight"
+vendor: Synth Solutions
+homepage: https://github.com/jospnunes/insite
+license: GPL-3.0-or-later
+contents:
+  - src: ${BIN}
+    dst: /usr/bin/insite
+    expand: true
+    file_info:
+      mode: 0755
+  - src: LICENSE
+    dst: /usr/share/licenses/insite/LICENSE
+  - src: README.md
+    dst: /usr/share/doc/insite/README.md
+overrides:
+  deb:
+    suggests:
+      - chromium
+  rpm:
+    suggests:
+      - chromium

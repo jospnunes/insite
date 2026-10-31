@@ -1,0 +1,83 @@
+# Builds the .deb and .rpm packages from the released musl archives and adds
+# them to the GitHub Release. Called by the dist "host" step (see
+# dist-workspace.toml); it runs after the release exists. Needs no secret
+# beyond GITHUB_TOKEN.
+name: Publish Linux packages
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist plan (JSON) of the release being published
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  NFPM_VERSION: 2.48.0
+  # From https://github.com/goreleaser/nfpm/releases/download/v2.48.0/checksums.txt
+  NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
+
+jobs:
+  packages:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLAN: ${{ inputs.plan }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read the tag from the plan
+        run: |
+          tag=$(printf '%s' "$PLAN" | jq -r '.announcement_tag')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::announcement_tag is missing from the dist plan"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Install nfpm
+        run: |
+          file="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$file" \
+            "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/$file"
+          echo "$NFPM_SHA256  $RUNNER_TEMP/$file" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/nfpm"
+          tar -xzf "$RUNNER_TEMP/$file" -C "$RUNNER_TEMP/nfpm" nfpm
+          echo "NFPM=$RUNNER_TEMP/nfpm/nfpm" >> "$GITHUB_ENV"
+
+      - name: Download the musl archives
+        run: |
+          mkdir -p "$RUNNER_TEMP/dl"
+          gh release download "$TAG" --dir "$RUNNER_TEMP/dl" \
+            --pattern 'insite-x86_64-unknown-linux-musl.tar.xz*' \
+            --pattern 'insite-aarch64-unknown-linux-musl.tar.xz*'
+          cd "$RUNNER_TEMP/dl"
+          sha256sum -c insite-x86_64-unknown-linux-musl.tar.xz.sha256
+          sha256sum -c insite-aarch64-unknown-linux-musl.tar.xz.sha256
+
+      - name: Build the packages
+        run: |
+          out="$RUNNER_TEMP/packages"
+          mkdir -p "$out"
+          for arch in x86_64 aarch64; do
+            dir="$RUNNER_TEMP/x-$arch"
+            mkdir -p "$dir"
+            tar -xJf "$RUNNER_TEMP/dl/insite-$arch-unknown-linux-musl.tar.xz" -C "$dir"
+            bin=$(find "$dir" -type f -name insite | head -n 1)
+            if [ -z "$bin" ]; then
+              echo "::error::no insite binary in the $arch archive"
+              exit 1
+            fi
+            pkg/build-packages.sh "$VERSION" "$arch" "$bin" "$out"
+          done
+          ls -l "$out"
+
+      - name: Upload to the release
+        run: |
+          gh release upload "$TAG" "$RUNNER_TEMP"/packages/*.deb "$RUNNER_TEMP"/packages/*.rpm --clobber
