@@ -223,6 +223,7 @@ fn main() -> ExitCode {
                 accept_language: opts.request.accept_language.clone(),
                 js_paths,
                 dom_properties,
+                progress: None,
             },
             timeout,
             proxy: browser_proxy(),

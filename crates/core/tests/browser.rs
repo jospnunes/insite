@@ -9,6 +9,7 @@ use std::time::Duration;
 use hyper::Response;
 use insite_core::collect::browser::{Browser, Visit};
 use insite_core::collect::deadline::Deadline;
+use insite_core::collect::progress::{BrowserStage, Progress};
 use server::{Server, TlsMode, ok};
 
 const PAGE: &str = r#"<!doctype html><html lang="en"><head><title>t</title>
@@ -50,6 +51,7 @@ async fn loads_the_page_and_reads_what_signatures_need() {
         accept_language: "en".into(),
         js_paths: vec!["React.version".into(), "Vue.version".into()],
         dom_properties: vec![("h1#main".into(), "textContent".into())],
+        progress: None,
     };
     let url = format!("http://{}/", server.addr);
     let data = browser.visit(&url, &visit, &deadline).await;
@@ -101,6 +103,7 @@ addEventListener('load', () => setTimeout(() => document.body.append('late'), 15
         accept_language: "en".into(),
         js_paths: Vec::new(),
         dom_properties: Vec::new(),
+        progress: None,
     };
     let data = browser
         .visit(&format!("http://{}/", server.addr), &visit, &deadline)
@@ -127,6 +130,7 @@ async fn a_navigation_error_is_reported_not_raised() {
         accept_language: "en".into(),
         js_paths: Vec::new(),
         dom_properties: Vec::new(),
+        progress: None,
     };
     // A port nothing listens on.
     let port = std::net::TcpListener::bind("127.0.0.1:0")
@@ -155,7 +159,42 @@ fn plain_visit() -> Visit {
         accept_language: "en".into(),
         js_paths: Vec::new(),
         dom_properties: Vec::new(),
+        progress: None,
     }
+}
+
+/// A live view says what the browser is doing: navigating, loaded, quiet, once each and in order.
+#[tokio::test]
+async fn visit_reports_its_stages() {
+    if !chrome() {
+        eprintln!("skipped: set CHROME_PATH to run the browser tests");
+        return;
+    }
+    let server = Server::start(TlsMode::Plain, 0, |_| async move { ok(PAGE) }).await;
+    let deadline = Deadline::new(tokio::time::Instant::now() + Duration::from_secs(30), None);
+    let mut browser = Browser::launch(None, &deadline).await.expect("the browser starts");
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let visit = Visit {
+        progress: Some(tx),
+        ..plain_visit()
+    };
+    let data = browser
+        .visit(&format!("http://{}/", server.addr), &visit, &deadline)
+        .await;
+    browser.close().await;
+    assert_eq!(data.error, None);
+    drop(visit);
+    let mut stages = Vec::new();
+    while let Some(event) = rx.recv().await {
+        match event {
+            Progress::Browser(stage) => stages.push(stage),
+            other => panic!("only browser stages expected, got {other:?}"),
+        }
+    }
+    assert_eq!(
+        stages,
+        [BrowserStage::Navigating, BrowserStage::Loaded, BrowserStage::Quiet]
+    );
 }
 
 /// `alert()` and `confirm()` block the renderer until someone answers them.

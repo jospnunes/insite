@@ -21,6 +21,7 @@ use tokio::time::Instant;
 
 use self::cdp::{Connection, Event};
 use crate::collect::deadline::Deadline;
+use crate::collect::progress::{BrowserStage, Progress, ProgressSender, emit};
 use crate::snapshot::{BrowserData, BrowserMetrics, BrowserResource};
 
 /// The rendered HTML kept in the snapshot, like the page body.
@@ -56,6 +57,8 @@ pub struct Visit {
     pub js_paths: Vec<String>,
     /// Selector and element property pairs the `dom` signatures read.
     pub dom_properties: Vec<(String, String)>,
+    /// Receives the visit's stages (`Progress::Browser`); `None` sends nothing.
+    pub progress: Option<ProgressSender>,
 }
 
 pub struct Browser {
@@ -340,6 +343,8 @@ impl Browser {
 
         // Drop events from before the navigation.
         while self.events.try_recv().is_ok() {}
+        // Before the call: it answers only once the navigation commits, which a slow server delays.
+        emit(&visit.progress, Progress::Browser(BrowserStage::Navigating));
         let navigated = self
             .conn
             .call("Page.navigate", json!({ "url": url }), s, deadline)
@@ -354,9 +359,10 @@ impl Browser {
             .unwrap_or(deadline.instant());
         let frame = navigated["frameId"].as_str().unwrap_or_default().to_owned();
         let quiet = self
-            .wait_until_quiet(&session, &frame, stop_waiting, deadline, data)
+            .wait_until_quiet(&session, &frame, stop_waiting, deadline, &visit.progress, data)
             .await;
         data.quiet = quiet;
+        emit(&visit.progress, Progress::Browser(BrowserStage::Quiet));
 
         let expression = collector_expression(&visit.js_paths, &visit.dom_properties);
         let evaluate = self.conn.call(
@@ -402,6 +408,7 @@ impl Browser {
         frame: &str,
         until: Instant,
         deadline: &Deadline,
+        progress: &Option<ProgressSender>,
         data: &mut BrowserData,
     ) -> bool {
         let started = Instant::now();
@@ -425,6 +432,7 @@ impl Browser {
                     if event.method == "Page.loadEventFired" && loaded_at.is_none() {
                         loaded_at = Some(Instant::now());
                         data.load_ms = Some(started.elapsed().as_secs_f64() * 1000.0);
+                        emit(progress, Progress::Browser(BrowserStage::Loaded));
                     }
                     if event.method == "Page.lifecycleEvent"
                         && event.params["name"] == "firstContentfulPaint"
