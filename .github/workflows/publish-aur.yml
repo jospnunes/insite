@@ -1,0 +1,111 @@
+# Publishes the insite-bin package to the AUR from the released musl archives.
+# Called by the dist "host" step (see dist-workspace.toml); it runs after the
+# release exists. Needs the AUR_SSH_KEY secret: the private key of an AUR
+# account that maintains insite-bin. Only our own shell steps touch the key;
+# no third-party action receives it.
+name: Publish to the AUR
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist plan (JSON) of the release being published
+        required: true
+        type: string
+    secrets:
+      AUR_SSH_KEY:
+        description: private SSH key of the AUR account that maintains insite-bin
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  aur:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      PLAN: ${{ inputs.plan }}
+      AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
+    steps:
+      - name: Check the AUR key is set
+        run: |
+          if [ -z "$AUR_SSH_KEY" ]; then
+            echo "::error::AUR_SSH_KEY is not set"
+            exit 1
+          fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read the tag and version from the plan
+        run: |
+          set -euo pipefail
+          tag=$(printf '%s' "$PLAN" | jq -r '.announcement_tag')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::announcement_tag is missing from the dist plan"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Read the archive checksums
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/dl"
+          mkdir -p "$dl"
+          gh release download "$TAG" --dir "$dl" \
+            --pattern 'insite-x86_64-unknown-linux-musl.tar.xz.sha256' \
+            --pattern 'insite-aarch64-unknown-linux-musl.tar.xz.sha256'
+          # Each file reads "<hash> *<archive name>"; only the hash is needed.
+          echo "SHA_X86_64=$(awk '{print $1}' "$dl/insite-x86_64-unknown-linux-musl.tar.xz.sha256")" >> "$GITHUB_ENV"
+          echo "SHA_AARCH64=$(awk '{print $1}' "$dl/insite-aarch64-unknown-linux-musl.tar.xz.sha256")" >> "$GITHUB_ENV"
+
+      - name: Render the PKGBUILD and .SRCINFO
+        run: |
+          set -euo pipefail
+          pkg/aur/render.sh "$VERSION" "$SHA_X86_64" "$SHA_AARCH64" "$RUNNER_TEMP/aur-files"
+          cat "$RUNNER_TEMP/aur-files/PKGBUILD"
+
+      - name: Set up SSH for the AUR
+        run: |
+          set -euo pipefail
+          ssh_dir="$RUNNER_TEMP/ssh"
+          mkdir -p "$ssh_dir"
+          chmod 700 "$ssh_dir"
+          (umask 077 && printf '%s\n' "$AUR_SSH_KEY" > "$ssh_dir/aur_key")
+          chmod 600 "$ssh_dir/aur_key"
+          # Host keys pinned from the fingerprints published on
+          # https://aur.archlinux.org (Ed25519 SHA256:RFzBCUItH9LZS0cKB5UE6ceAYhBD5C8GeOBip8Z11+4,
+          # ECDSA SHA256:uTa/0PndEgPZTf76e1DFqXKJEXKsn7m9ivhLQtzGOCI,
+          # RSA SHA256:5s5cIyReIfNNVGRFdDbe3hdYiI5OelHGpw2rOUud3Q8).
+          # Never fetched with ssh-keyscan at run time.
+          cat > "$ssh_dir/known_hosts" <<'KEYS'
+          aur.archlinux.org ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEuBKrPzbawxA/k2g6NcyV5jmqwJ2s+zpgZGZ7tpLIcN
+          aur.archlinux.org ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBLMiLrP8pVi5BFX2i3vepSUnpedeiewE5XptnUnau+ZoeUOPkpoCgZZuYfpaIQfhhJJI5qgnjJmr4hyJbe/zxow=
+          aur.archlinux.org ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQDKF9vAFWdgm9Bi8uc+tYRBmXASBb5cB5iZsB7LOWWFeBrLp3r14w0/9S2vozjgqY5sJLDPONWoTTaVTbhe3vwO8CBKZTEt1AcWxuXNlRnk9FliR1/eNB9uz/7y1R0+c1Md+P98AJJSJWKN12nqIDIhjl2S1vOUvm7FNY43fU2knIhEbHybhwWeg+0wxpKwcAd/JeL5i92Uv03MYftOToUijd1pqyVFdJvQFhqD4v3M157jxS5FTOBrccAEjT+zYmFyD8WvKUa9vUclRddNllmBJdy4NyLB8SvVZULUPrP3QOlmzemeKracTlVOUG1wsDbxknF1BwSCU7CmU6UFP90kpWIyz66bP0bl67QAvlIc52Yix7pKJPbw85+zykvnfl2mdROsaT8p8R9nwCdFsBc9IiD0NhPEHcyHRwB8fokXTajk2QnGhL+zP5KnkmXnyQYOCUYo3EKMXIlVOVbPDgRYYT/XqvBuzq5S9rrU70KoI/S5lDnFfx/+lPLdtcnnEPk=
+          KEYS
+          echo "GIT_SSH_COMMAND=ssh -i $ssh_dir/aur_key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_dir/known_hosts -o StrictHostKeyChecking=yes" >> "$GITHUB_ENV"
+
+      - name: Push to the AUR
+        run: |
+          set -euo pipefail
+          repo="$RUNNER_TEMP/aur-repo"
+          git clone ssh://aur@aur.archlinux.org/insite-bin.git "$repo"
+          cd "$repo"
+          # The AUR only takes the master branch; a new package starts as an empty repo.
+          git checkout -B master
+          cp "$RUNNER_TEMP/aur-files/PKGBUILD" "$RUNNER_TEMP/aur-files/.SRCINFO" .
+          git add PKGBUILD .SRCINFO
+          if git diff --cached --quiet; then
+            echo "The AUR already has insite-bin $VERSION; nothing to push."
+            exit 0
+          fi
+          git -c user.name='José Pedro Pereira' -c user.email='contato@synthsolutions.com.br' \
+            commit -m "Update to $VERSION"
+          git push origin master
+
+      - name: Remove the SSH key
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/ssh"
