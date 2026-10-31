@@ -46,7 +46,6 @@ enum Tone {
     Red,
     Cyan,
     Magenta,
-    Blue,
     Track,
 }
 
@@ -68,7 +67,6 @@ impl Tone {
             Tone::Red => (0xf8, 0x51, 0x49),
             Tone::Cyan => (0x39, 0xc5, 0xcf),
             Tone::Magenta => (0xbc, 0x8c, 0xff),
-            Tone::Blue => (0x58, 0xa6, 0xff),
             Tone::Track => (0x21, 0x26, 0x2d),
         }
     }
@@ -83,7 +81,6 @@ impl Tone {
             Tone::Red => (1, false),
             Tone::Cyan => (6, false),
             Tone::Magenta => (5, false),
-            Tone::Blue => (4, false),
         }
     }
 }
@@ -129,6 +126,7 @@ impl Theme {
     }
 
     /// No color depth, no UTF-8: what tests use to get predictable output.
+    #[cfg(test)]
     pub(crate) fn plain_ascii() -> Theme {
         Theme {
             truecolor: false,
@@ -199,10 +197,6 @@ impl Theme {
 
     pub(crate) fn magenta(&self, text: &str) -> String {
         self.tone(Tone::Magenta, text)
-    }
-
-    pub(crate) fn blue(&self, text: &str) -> String {
-        self.tone(Tone::Blue, text)
     }
 
     /// Bold, shading from cyan to magenta across the characters with 24-bit color;
@@ -438,7 +432,7 @@ mod tests {
     #[test]
     fn empty_input_stays_empty_and_painters_reset() {
         for t in themes() {
-            let painters: [fn(&Theme, &str) -> String; 9] = [
+            let painters: [fn(&Theme, &str) -> String; 8] = [
                 Theme::dim,
                 Theme::bold,
                 Theme::green,
@@ -446,7 +440,6 @@ mod tests {
                 Theme::red,
                 Theme::cyan,
                 Theme::magenta,
-                Theme::blue,
                 Theme::brand,
             ];
             for paint in painters {

@@ -1,5 +1,6 @@
 //! Collection of one or many sites, and printing reports as they finish.
 
+use std::borrow::Cow;
 use std::io::{IsTerminal, Write};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -18,6 +19,7 @@ use insite_core::report::{Module, ModuleName, Outcome, Report, Selection};
 use insite_core::snapshot::{BrowserData, Snapshot};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 
+use crate::live::{self, Forwarder, UiEvent, UiLink};
 use crate::snapshots::Writer;
 use crate::{Format, markdown, render};
 
@@ -48,7 +50,7 @@ pub struct BrowserPlan {
 /// A report ready to print: the fast one while the browser still works, or
 /// the complete one.
 enum Ready {
-    Fast(Box<Report>),
+    Fast(usize, Box<Report>),
     Full(usize, Box<Snapshot>, Box<Report>),
 }
 
@@ -66,14 +68,19 @@ pub fn run(mut plan: Plan) -> ExitCode {
         && std::io::stdout().is_terminal();
     let mut targets = Vec::new();
     let mut warned_credentials = false;
-    for (i, input) in plan.inputs.iter().enumerate() {
+    // What the live view labels its rows with, one per valid target.
+    let mut shown = Vec::new();
+    for input in &plan.inputs {
         match Target::parse(input) {
             Ok(t) => {
                 if t.credentials_ignored && !warned_credentials {
                     warned_credentials = true;
                     eprintln!("insite: credentials in the URL are ignored (they are not sent or saved)");
                 }
-                targets.push((i, t));
+                // A target's index is its position among the valid ones: it orders like the
+                // input and is the row of the live view.
+                targets.push((targets.len(), t));
+                shown.push(input.clone());
             }
             Err(e) => {
                 eprintln!("insite: {input}: {e}");
@@ -97,14 +104,36 @@ pub fn run(mut plan: Plan) -> ExitCode {
     let started = Instant::now();
     let (stop_tx, stop) = tokio::sync::watch::channel(false);
     plan.opts.stop = Some(stop.clone());
+    let live = matches!(plan.format, Format::Live { .. });
+    let mut ui_thread = None;
     let result = runtime.block_on(async {
+        let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], plan.native_roots)?);
+        // The live view starts with the collection, so the shell's prompt waits for it.
+        let ui = match plan.format {
+            Format::Live { verbose } => {
+                live::restore_on_panic();
+                let (ui, thread) = live::spawn_ui(shown, plan.selection, verbose, plan.browser.is_some());
+                ui_thread = Some(thread);
+                Some(ui)
+            }
+            _ => None,
+        };
+        let link = ui.as_ref().map(UiLink::to);
         // First Ctrl-C: close every snapshot with what has arrived and print the
         // reports. Second: quit at once.
+        let notice = link.clone();
         tokio::spawn(async move {
             if tokio::signal::ctrl_c().await.is_ok() {
-                eprintln!("\ninsite: interrupted; printing what arrived (Ctrl-C again to quit)");
+                let text = "insite: interrupted; printing what arrived (Ctrl-C again to quit)";
+                match &notice {
+                    Some(ui) => ui.send(UiEvent::Message(text.to_owned())),
+                    None => eprintln!("\n{text}"),
+                }
                 let _ = stop_tx.send(true);
                 if tokio::signal::ctrl_c().await.is_ok() {
+                    if notice.is_some() {
+                        live::quit();
+                    }
                     // No destructors run on this exit: stop the browsers and delete
                     // their profiles first.
                     insite_core::collect::browser::cleanup_all();
@@ -112,7 +141,6 @@ pub fn run(mut plan: Plan) -> ExitCode {
                 }
             }
         });
-        let collector = Collector::with(Resolver::from_system()?, Tls::new(&[], plan.native_roots)?);
         let (tx, mut rx) = mpsc::channel::<Ready>(plan.concurrency.max(1));
         let permits = Arc::new(Semaphore::new(plan.concurrency));
         let browsers = Arc::new(Semaphore::new(BROWSERS));
@@ -123,6 +151,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
             let (browser, browsers) = (browser.clone(), browsers.clone());
             let selection = plan.selection;
             let stop = stop.clone();
+            let link = link.clone();
             tokio::spawn(async move {
                 for (n, (index, target)) in group.into_iter().enumerate() {
                     if n > 0 {
@@ -139,19 +168,46 @@ pub fn run(mut plan: Plan) -> ExitCode {
                     let launch = browser.as_ref().map(|b| {
                         let (proxy, browsers, stop, timeout) =
                             (b.proxy.clone(), browsers.clone(), stop.clone(), b.timeout);
+                        let link = link.clone();
                         tokio::spawn(async move {
                             let (slot, deadline) = acquire_browser_slot(browsers, timeout, stop).await;
+                            if let Some(ui) = &link {
+                                ui.send(UiEvent::Launching { site: index });
+                            }
                             let launched = Browser::launch(proxy.as_deref(), &deadline).await;
                             (launched, slot, deadline)
                         })
                     });
-                    let mut snapshot = collector.collect(&target, &opts).await;
+                    // Each site reports its own progress, so a batch's stages do not interleave.
+                    let (progress, forwarder) = match &link {
+                        Some(ui) => {
+                            let (progress, forwarder) = Forwarder::spawn(ui.clone(), index);
+                            (Some(progress), Some(forwarder))
+                        }
+                        None => (None, None),
+                    };
+                    let site_opts = match &progress {
+                        Some(progress) => {
+                            let mut site_opts = (*opts).clone();
+                            site_opts.progress = Some(progress.clone());
+                            Cow::Owned(site_opts)
+                        }
+                        None => Cow::Borrowed(&*opts),
+                    };
+                    let mut snapshot = collector.collect(&target, &site_opts).await;
                     drop(permit);
                     if let (Some(launch), Some(plan)) = (launch, browser.as_ref()) {
                         if let Some((_, mut report)) = analyzed(snapshot.clone(), selection).await {
                             report.modules.browser = Module::skipped("the browser is still loading the page");
-                            let _ = tx.send(Ready::Fast(Box::new(report))).await;
+                            let _ = tx.send(Ready::Fast(index, Box::new(report))).await;
                         }
+                        let visit = match &progress {
+                            Some(progress) => Cow::Owned(Visit {
+                                progress: Some(progress.clone()),
+                                ..plan.visit.clone()
+                            }),
+                            None => Cow::Borrowed(&plan.visit),
+                        };
                         // Where the fast collection ended, or the input when it did not.
                         let url = match (snapshot.chain.last(), &snapshot.page) {
                             (Some(hop), Some(_)) => hop.url.clone(),
@@ -159,7 +215,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
                         };
                         snapshot.browser = Some(match launch.await {
                             Ok((Ok(mut b), slot, deadline)) => {
-                                let data = b.visit(&url, &plan.visit, &deadline).await;
+                                let data = b.visit(&url, &visit, &deadline).await;
                                 b.close().await;
                                 drop(slot);
                                 data
@@ -174,7 +230,15 @@ pub fn run(mut plan: Plan) -> ExitCode {
                             },
                         });
                     }
+                    // What is still queued goes out before the report; the progress channel
+                    // may stay open (auxiliary tasks hold senders), so it is not awaited.
+                    if let Some(forwarder) = forwarder {
+                        forwarder.finish().await;
+                    }
                     let Some((snapshot, report)) = analyzed(snapshot, selection).await else {
+                        if let Some(ui) = &link {
+                            ui.send(UiEvent::Gone { site: index });
+                        }
                         continue;
                     };
                     if tx
@@ -190,20 +254,40 @@ pub fn run(mut plan: Plan) -> ExitCode {
         drop(tx);
         while let Some(ready) = rx.recv().await {
             match ready {
-                Ready::Fast(report) => printer.print_fast(&report),
+                Ready::Fast(site, report) => {
+                    printer.print_fast(&report);
+                    if let Some(ui) = &ui {
+                        let _ = ui.send(UiEvent::Fast { site, report });
+                    }
+                }
                 Ready::Full(index, snapshot, report) => {
                     if let Some(writer) = save.as_mut()
                         && let Err(e) = writer.write(&snapshot)
                     {
-                        eprintln!("insite: could not save the snapshot: {e}");
+                        let text = format!("insite: could not save the snapshot: {e}");
+                        match &ui {
+                            Some(ui) => {
+                                let _ = ui.send(UiEvent::Message(text));
+                            }
+                            None => eprintln!("{text}"),
+                        }
                         save = None;
                     }
                     printer.print(index, &report);
+                    if let Some(ui) = &ui {
+                        let _ = ui.send(UiEvent::Full { site: index, report });
+                    }
                 }
             }
         }
+        // `ui` is dropped here, the last sender that keeps the live view open.
         Ok::<_, String>(())
     });
+    // The live view commits what is left and gives the terminal back before anything else
+    // is printed.
+    if let Some(thread) = ui_thread {
+        let _ = thread.join();
+    }
     shut_down(runtime);
     if let Some(writer) = save
         && let Err(e) = writer.finish()
@@ -214,7 +298,8 @@ pub fn run(mut plan: Plan) -> ExitCode {
         eprintln!("insite: {e}");
         return ExitCode::from(2);
     }
-    if plan.inputs.len() > 1 && std::io::stderr().is_terminal() {
+    // The live view has its own summary.
+    if !live && plan.inputs.len() > 1 && std::io::stderr().is_terminal() {
         eprintln!("{}", printer.summary(started.elapsed()));
     }
     let code = printer.finish();
@@ -346,6 +431,10 @@ impl Printer {
 
     pub fn print(&mut self, index: usize, report: &Report) {
         self.exit.record(&report.outcome);
+        // The live view prints on its own; the printer only keeps the outcomes.
+        if matches!(self.format, Format::Live { .. }) {
+            return;
+        }
         let text = match self.format {
             Format::Terminal { color, verbose, width } if self.fast_printed => {
                 render::browser_update(report, color, verbose, width)
@@ -368,6 +457,7 @@ impl Printer {
                 self.json.push((index, report.clone()));
                 String::new()
             }
+            Format::Live { .. } => unreachable!("returned above"),
         };
         self.printed += 1;
         write_out(&text);
@@ -414,7 +504,7 @@ impl Printer {
 }
 
 /// Writes to stdout, ignoring a closed pipe (`insite ... | head`).
-fn write_out(text: &str) {
+pub(crate) fn write_out(text: &str) {
     let mut out = std::io::stdout().lock();
     let _ = out.write_all(text.as_bytes()).and_then(|_| out.flush());
 }

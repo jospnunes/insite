@@ -10,11 +10,13 @@ use flate2::Compression;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use insite_core::analyze::analyze_selected;
-use insite_core::report::Selection;
+use insite_core::report::{Module, Report, Selection};
 use insite_core::snapshot::Snapshot;
 
-use crate::Format;
-use crate::run::Printer;
+use crate::live::theme::Theme;
+use crate::live::{self, Saved};
+use crate::run::{Printer, write_out};
+use crate::{Format, style};
 
 pub enum Writer {
     Plain(BufWriter<File>),
@@ -72,6 +74,17 @@ pub fn read(path: &Path) -> Result<Vec<Snapshot>, String> {
         .collect()
 }
 
+/// The report as the fast collection had it, for a snapshot that has browser data: what
+/// the live view froze before the browser's act.
+fn before_browser(snapshot: &Snapshot, selection: Selection) -> Option<Report> {
+    snapshot.browser.as_ref()?;
+    let mut fast = snapshot.clone();
+    fast.browser = None;
+    let mut report = analyze_selected(&fast, selection);
+    report.modules.browser = Module::skipped("the browser is still loading the page");
+    Some(report)
+}
+
 pub fn analyze_saved(path: &Path, selection: Selection, format: Format) -> ExitCode {
     let snapshots = match read(path) {
         Ok(s) if !s.is_empty() => s,
@@ -82,6 +95,24 @@ pub fn analyze_saved(path: &Path, selection: Selection, format: Format) -> ExitC
         insite_core::detect::warm_up();
     }
     let mut printer = Printer::new(format, snapshots.len());
+    if let Format::Live { verbose } = format {
+        // The live view's final frames, printed once: nothing moves.
+        let saved: Vec<Saved> = snapshots
+            .iter()
+            .enumerate()
+            .map(|(i, snapshot)| {
+                let full = analyze_selected(snapshot, selection);
+                printer.print(i, &full);
+                Saved {
+                    fast: before_browser(snapshot, selection),
+                    full,
+                }
+            })
+            .collect();
+        let lines = live::saved_lines(&saved, verbose, style::terminal_width(), &Theme::detect());
+        write_out(&(lines.join("\n") + "\n"));
+        return printer.finish();
+    }
     for (i, snapshot) in snapshots.iter().enumerate() {
         printer.print(i, &analyze_selected(snapshot, selection));
     }

@@ -109,6 +109,21 @@ struct Row {
     site: Option<Site>,
     /// Nothing more will change in the row.
     full: bool,
+    /// Some event for the site has arrived.
+    started: bool,
+    /// Why the row ended without a report.
+    end: Option<End>,
+}
+
+/// How a row ended when no report came for it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum End {
+    /// The analysis died after the collection.
+    Gone,
+    /// The run was interrupted before the site started.
+    NotStarted,
+    /// The run was interrupted while the site was being collected.
+    Interrupted,
 }
 
 /// The batch table's state; the CLI feeds it the reports and draws what it returns.
@@ -136,6 +151,8 @@ impl BatchView {
                 label: host_of(input),
                 site: None,
                 full: false,
+                started: false,
+                end: None,
             })
             .collect();
         let widest = rows.iter().map(|r| display_width(&r.label)).max().unwrap_or(0).max(4);
@@ -145,6 +162,42 @@ impl BatchView {
             committed: 0,
             widest,
         }
+    }
+
+    /// Something happened for the site: it left the queue.
+    pub(crate) fn on_started(&mut self, index: usize) {
+        if let Some(row) = self.rows.get_mut(index) {
+            row.started = true;
+        }
+    }
+
+    /// The analysis of the site died, so no report will come. A row that already has its
+    /// fast data keeps it and stops waiting for the browser.
+    pub(crate) fn on_gone(&mut self, index: usize) {
+        let Some(row) = self.rows.get_mut(index) else {
+            return;
+        };
+        if row.site.is_none() {
+            row.end = Some(End::Gone);
+        }
+        row.full = true;
+    }
+
+    /// The channel closed: every row that is not final becomes final, in place. A row with
+    /// fast data keeps it (its browser never answered); one without is `interrupted` if its
+    /// site had started and `not started` if not.
+    pub(crate) fn end_unfinished(&mut self) {
+        for row in self.rows.iter_mut().filter(|r| !r.full) {
+            if row.site.is_none() {
+                row.end = Some(if row.started { End::Interrupted } else { End::NotStarted });
+            }
+            row.full = true;
+        }
+    }
+
+    /// Whether some row is still waiting for its report: a spinner is on screen.
+    pub(crate) fn pending(&self) -> bool {
+        self.committed < self.rows.len()
     }
 
     /// The report without the browser's part (or the only report, when there is no browser).
@@ -215,14 +268,17 @@ impl BatchView {
     }
 
     /// A blank line, then `N sites in T s   grades <badges>   <alerts>`, wrapped at the width.
-    pub(crate) fn summary_lines(&self, elapsed: Duration, width: usize, theme: &Theme) -> Vec<String> {
+    /// Without the wall time (`--from` does not know it) the ` in T s` part is left out.
+    pub(crate) fn summary_lines(&self, elapsed: Option<Duration>, width: usize, theme: &Theme) -> Vec<String> {
         let n = self.rows.len();
-        let head = format!(
-            "{} {} {}",
-            theme.bold(&format!("{n} site{}", if n == 1 { "" } else { "s" })),
-            theme.dim("in"),
-            theme.bold(&format!("{:.1} s", elapsed.as_secs_f64()))
-        );
+        let mut head = theme.bold(&format!("{n} site{}", if n == 1 { "" } else { "s" }));
+        if let Some(elapsed) = elapsed {
+            head = format!(
+                "{head} {} {}",
+                theme.dim("in"),
+                theme.bold(&format!("{:.1} s", elapsed.as_secs_f64()))
+            );
+        }
         // Gap before each part, and the part. Badges sit one space apart.
         let mut parts = vec![(0, head), (3, theme.dim("grades"))];
         for row in &self.rows {
@@ -323,6 +379,22 @@ impl BatchView {
         let row = &self.rows[i];
         let dash = || theme.dim(theme.glyph(Glyph::Skipped));
         let mut cells = vec![(cut(&row.label, layout.site, theme), layout.site)];
+        if let Some(end) = row.end {
+            // No report: the verdict spans time, grade and tls.
+            let verdict = match end {
+                End::Gone => analysis_failed(theme),
+                End::NotStarted => theme.dim("not started"),
+                End::Interrupted => theme.yellow("interrupted"),
+            };
+            cells.push((verdict, TIME + GAP + GRADE + GAP + TLS));
+            if self.browser {
+                cells.push((dash(), LCP));
+            }
+            if layout.stack.is_some() {
+                cells.push((dash(), 0));
+            }
+            return join(&cells, width);
+        }
         let Some(site) = &row.site else {
             cells.push((theme.cyan(theme.spinner(tick + i)), TIME));
             cells.extend([(dash(), GRADE), (dash(), TLS)]);
@@ -366,6 +438,11 @@ impl BatchView {
         }
         join(&cells, width)
     }
+}
+
+/// The red verdict for a site whose analysis died, in the table and as a line of its own.
+pub(super) fn analysis_failed(theme: &Theme) -> String {
+    theme.red(&format!("{} analysis failed", theme.glyph(Glyph::Bad)))
 }
 
 /// The days left on the certificate, yellow under `SOON` and red once expired.
@@ -749,6 +826,77 @@ mod tests {
     }
 
     #[test]
+    fn a_gone_row_is_final_and_red() {
+        let theme = ascii();
+        let mut v = view(&["a.com", "b.com"], false);
+        v.on_gone(0);
+        v.on_fast(1, &report("A", 60, 400.0));
+        let done = plain(&v.take_finished(100, &theme));
+        assert_eq!(done.len(), 3, "{done:#?}");
+        assert!(
+            done[1].contains("a.com") && done[1].contains("x analysis failed"),
+            "{done:#?}"
+        );
+        assert!(done[2].contains("b.com") && done[2].contains("0.4 s"), "{done:#?}");
+        // The summary shows a skipped badge for the row with no report.
+        assert!(plain(&v.summary_lines(None, 100, &theme))[1].contains("grades"));
+    }
+
+    #[test]
+    fn a_gone_site_with_fast_data_keeps_it() {
+        let theme = ascii();
+        let mut v = view(&["a.com"], true);
+        v.on_fast(0, &report("A", 60, 400.0));
+        assert!(v.take_finished(100, &theme).is_empty(), "still waiting for the browser");
+        v.on_gone(0);
+        let done = plain(&v.take_finished(100, &theme));
+        assert!(
+            done[1].contains("0.4 s") && !done[1].contains("analysis failed"),
+            "{done:#?}"
+        );
+    }
+
+    #[test]
+    fn unfinished_rows_end_as_not_started_or_interrupted_in_order() {
+        let theme = ascii();
+        let mut v = view(&["a.com", "b.com", "c.com", "d.com"], true);
+        v.on_fast(0, &report("A", 60, 400.0));
+        v.on_started(1);
+        v.on_fast(3, &unreachable("refused"));
+        assert!(v.pending());
+        v.end_unfinished();
+        let done = plain(&v.take_finished(100, &theme));
+        assert_eq!(done.len(), 5, "{done:#?}");
+        // Row a had fast data: it keeps it, with no spinner in the LCP column.
+        assert!(done[1].contains("a.com") && done[1].contains("0.4 s"), "{done:#?}");
+        assert!(
+            done[2].contains("b.com") && done[2].contains("interrupted"),
+            "{done:#?}"
+        );
+        assert!(
+            done[3].contains("c.com") && done[3].contains("not started"),
+            "{done:#?}"
+        );
+        assert!(
+            done[4].contains("d.com") && done[4].contains("unreachable"),
+            "{done:#?}"
+        );
+        assert!(!v.pending());
+        assert!(v.frame(0, 100, 20, &theme).is_empty());
+    }
+
+    #[test]
+    fn the_summary_without_a_time_leaves_out_the_duration() {
+        let theme = ascii();
+        let mut v = view(&["a.com", "b.com"], false);
+        v.on_fast(0, &report("A", 60, 400.0));
+        let timed = plain(&v.summary_lines(Some(Duration::from_millis(2340)), 100, &theme));
+        let untimed = plain(&v.summary_lines(None, 100, &theme));
+        assert!(timed[1].starts_with("  2 sites in 2.3 s"), "{timed:#?}");
+        assert!(untimed[1].starts_with("  2 sites   grades"), "{untimed:#?}");
+    }
+
+    #[test]
     fn a_long_site_name_is_cut_with_an_ellipsis() {
         let ascii_theme = ascii();
         let long = format!("{}.com", "x".repeat(60));
@@ -770,7 +918,7 @@ mod tests {
         v.on_fast(1, &report("C", 12, 100.0));
         v.on_fast(2, &report("F", -4, 100.0));
         v.on_fast(3, &unreachable("timeout"));
-        let lines = v.summary_lines(Duration::from_millis(2340), 120, &theme);
+        let lines = v.summary_lines(Some(Duration::from_millis(2340)), 120, &theme);
         assert_eq!(strip(&lines[0]), "", "{lines:#?}");
         assert_eq!(
             strip(&lines[1]),
@@ -788,12 +936,12 @@ mod tests {
         let theme = ascii();
         let mut v = view(&["a.com"], false);
         v.on_fast(0, &report("A", 60, 100.0));
-        let lines = plain(&v.summary_lines(Duration::from_secs(1), 100, &theme));
+        let lines = plain(&v.summary_lines(Some(Duration::from_secs(1)), 100, &theme));
         assert_eq!(lines[1], "  1 site in 1.0 s   grades  A ", "{lines:#?}");
         // One certificate reads in the singular.
         let mut v = view(&["a.com"], false);
         v.on_fast(0, &report("A", 5, 100.0));
-        let lines = plain(&v.summary_lines(Duration::from_secs(1), 100, &theme));
+        let lines = plain(&v.summary_lines(Some(Duration::from_secs(1)), 100, &theme));
         assert!(
             lines[1].ends_with("1 certificate expires in under 30 days"),
             "{lines:#?}"
@@ -807,7 +955,7 @@ mod tests {
         for i in 0..30 {
             v.on_fast(i, &report("A", 5, 100.0));
         }
-        let lines = v.summary_lines(Duration::from_secs(9), 50, &theme);
+        let lines = v.summary_lines(Some(Duration::from_secs(9)), 50, &theme);
         assert!(lines.len() > 3, "{lines:#?}");
         assert!(lines.iter().all(|l| display_width(l) < 50), "{lines:#?}");
         assert!(
@@ -889,7 +1037,7 @@ mod tests {
         all.extend(v.take_finished(100, &theme));
         v.on_full(0, &a);
         all.extend(v.take_finished(100, &theme));
-        all.extend(v.summary_lines(Duration::from_secs(1), 100, &theme));
+        all.extend(v.summary_lines(Some(Duration::from_secs(1)), 100, &theme));
         all.extend(v.findings_lines(100, &theme));
         assert!(all.iter().any(|l| l.contains("Alpha")), "{all:#?}");
         for line in &all {

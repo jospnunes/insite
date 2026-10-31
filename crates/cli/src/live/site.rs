@@ -53,7 +53,8 @@ struct Hop {
     ms: f64,
 }
 
-/// What a live site has told us so far; the report, once it arrives, replaces all of it.
+/// What a live site has told us so far; the report, once it arrives, replaces all of it
+/// (the UI commits `final_lines` and drops the view).
 pub(crate) struct SiteView {
     host: String,
     selection: Selection,
@@ -61,7 +62,6 @@ pub(crate) struct SiteView {
     /// Milliseconds per phase (in `PHASES` order), by hop; the last event wins.
     phases: BTreeMap<usize, [Option<f64>; 5]>,
     done: Vec<Part>,
-    report: Option<Report>,
 }
 
 impl SiteView {
@@ -72,7 +72,6 @@ impl SiteView {
             hops: BTreeMap::new(),
             phases: BTreeMap::new(),
             done: Vec::new(),
-            report: None,
         }
     }
 
@@ -111,15 +110,8 @@ impl SiteView {
         }
     }
 
-    pub(crate) fn on_report(&mut self, report: &Report) {
-        self.report = Some(report.clone());
-    }
-
-    /// The lines to draw now. Once the report is in, they are the final lines.
+    /// The lines to draw now. When the report is in, the UI commits `final_lines` instead.
     pub(crate) fn frame(&self, tick: usize, width: usize, theme: &Theme) -> Vec<String> {
-        if let Some(report) = &self.report {
-            return final_lines(report, width, theme, false);
-        }
         // The hop being fetched is the one after the last redirect seen.
         let current = self.hops.keys().next_back().map_or(0, |h| h + 1);
         let hops: Vec<Hop> = self.hops.values().cloned().collect();
@@ -808,16 +800,6 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn the_report_replaces_the_collected_state() {
-        let report = full_report();
-        let mut view = SiteView::new("example.com", Selection::all());
-        view.on_progress(&Progress::Done(Part::Page));
-        view.on_report(&report);
-        let lines = view.frame(3, 100, &ascii());
-        assert_eq!(lines, final_lines(&report, 100, &ascii(), false));
-    }
-
-    #[test]
     fn final_glyphs_follow_severity() {
         let mut report = full_report();
         report.modules.security.findings = vec![finding("sec.hsts.missing", Severity::High, "No HSTS")];
@@ -1143,9 +1125,6 @@ pub(super) mod tests {
             assert!(text[stack + 1].starts_with(&" ".repeat(TEXT_AT)), "{text:#?}");
             assert!(!text[stack + 1].trim().is_empty());
         }
-        let mut view = SiteView::new("example.com", Selection::all());
-        view.on_report(&report);
-        assert!(view.frame(0, 60, &ascii()).iter().all(|l| !l.contains('\n')));
     }
 
     #[test]

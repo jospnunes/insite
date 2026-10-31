@@ -131,8 +131,18 @@ struct Args {
 /// How reports are printed.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Format {
-    Terminal { color: bool, verbose: bool, width: usize },
-    Json { pretty: bool },
+    Terminal {
+        color: bool,
+        verbose: bool,
+        width: usize,
+    },
+    /// An interactive terminal: the animated view, which reads the terminal's size itself.
+    Live {
+        verbose: bool,
+    },
+    Json {
+        pretty: bool,
+    },
     Ndjson,
     Markdown,
 }
@@ -161,10 +171,17 @@ fn main() -> ExitCode {
         Format::Markdown
     } else {
         let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
-        Format::Terminal {
-            color: stdout_tty && !no_color && style::enable_ansi(),
-            verbose: args.verbose,
-            width: style::terminal_width(),
+        let term = std::env::var("TERM").ok();
+        // Only asked on a terminal that wants colors: on Windows it switches the console mode.
+        let ansi = stdout_tty && !no_color && style::enable_ansi();
+        if live_mode(stdout_tty, no_color, term.as_deref(), ansi) {
+            Format::Live { verbose: args.verbose }
+        } else {
+            Format::Terminal {
+                color: ansi,
+                verbose: args.verbose,
+                width: style::terminal_width(),
+            }
         }
     };
 
@@ -242,6 +259,12 @@ fn main() -> ExitCode {
         concurrency: args.concurrency,
         browser,
     })
+}
+
+/// Whether the output is the animated view: a terminal that takes colors and cursor
+/// movement. Anything else gets today's plain text.
+pub(crate) fn live_mode(stdout_tty: bool, no_color: bool, term: Option<&str>, ansi: bool) -> bool {
+    stdout_tty && !no_color && term != Some("dumb") && ansi
 }
 
 /// The longest timeout accepted: a year. Beyond it, `Instant` arithmetic can overflow.
@@ -386,6 +409,20 @@ mod tests {
     fn lists_skip_comments_and_blanks() {
         let list = read_list("a.com\n\n  # comment\nb.com # trailing\n".as_bytes()).unwrap();
         assert_eq!(list, ["a.com", "b.com"]);
+    }
+
+    #[test]
+    fn live_mode_rules() {
+        assert!(live_mode(true, false, Some("xterm-256color"), true));
+        assert!(live_mode(true, false, None, true), "TERM may be unset");
+        // Each disabling condition alone turns it off.
+        assert!(
+            !live_mode(false, false, Some("xterm"), true),
+            "stdout is not a terminal"
+        );
+        assert!(!live_mode(true, true, Some("xterm"), true), "NO_COLOR");
+        assert!(!live_mode(true, false, Some("dumb"), true), "TERM=dumb");
+        assert!(!live_mode(true, false, Some("xterm"), false), "no ANSI support");
     }
 
     #[test]
