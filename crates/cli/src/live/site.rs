@@ -12,11 +12,11 @@ use crate::render::{clip, details_text, indent, ms, network_notes, severity, sho
 use crate::style::{Style, display_width, neutralize};
 
 /// Below this many columns the phase bars go away.
-const COMPACT: usize = 60;
+pub(super) const COMPACT: usize = 60;
 /// Width of a row label: the longest one, `security`.
-const LABEL: usize = 8;
+pub(super) const LABEL: usize = 8;
 /// Where a module's text starts: glyph, space, label, two spaces.
-const TEXT_AT: usize = LABEL + 4;
+pub(super) const TEXT_AT: usize = LABEL + 4;
 /// The least time, in ms, the live bars are scaled to before the report knows the total.
 const LIVE_SCALE_FLOOR: f64 = 250.0;
 /// The findings block stops adding low findings at this many lines.
@@ -186,12 +186,12 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
 }
 
 /// Page-controlled text that is safe to color and stays on one line.
-fn safe(text: &str) -> String {
+pub(super) fn safe(text: &str) -> String {
     clean(text).replace('\n', " ")
 }
 
 /// Sections one blank line apart; empty ones vanish.
-fn join_sections<const N: usize>(sections: [Vec<String>; N]) -> Vec<String> {
+pub(super) fn join_sections<const N: usize>(sections: [Vec<String>; N]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for section in sections.into_iter().filter(|s| !s.is_empty()) {
         if !out.is_empty() {
@@ -203,7 +203,7 @@ fn join_sections<const N: usize>(sections: [Vec<String>; N]) -> Vec<String> {
 }
 
 /// At most `cols` columns, with an ellipsis when cut.
-fn fit(text: &str, cols: usize, theme: &Theme) -> String {
+pub(super) fn fit(text: &str, cols: usize, theme: &Theme) -> String {
     if display_width(text) <= cols {
         return text.to_owned();
     }
@@ -432,7 +432,7 @@ fn short_url(url: &str, cols: usize, theme: &Theme) -> String {
 }
 
 /// The row for a module; a summary that wrapped continues on rows of its own, under the text.
-fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> Vec<String> {
+pub(super) fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> Vec<String> {
     let mut parts = text.split('\n');
     let first = format!(
         "{glyph} {}  {}",
@@ -444,14 +444,14 @@ fn module_row(theme: &Theme, glyph: &str, label: &str, text: &str) -> Vec<String
 }
 
 /// How a module ended, from its status and its worst finding.
-enum Mark {
+pub(super) enum Mark {
     Ok,
     Warn,
     Bad,
     Skipped,
 }
 
-fn mark<T>(module: &Module<T>) -> Mark {
+pub(super) fn mark<T>(module: &Module<T>) -> Mark {
     let worst = module.findings.iter().map(|f| f.severity).max();
     match module.status {
         Status::Skipped => Mark::Skipped,
@@ -460,6 +460,16 @@ fn mark<T>(module: &Module<T>) -> Mark {
         Status::Partial => Mark::Warn,
         _ if worst == Some(Severity::Medium) => Mark::Warn,
         _ => Mark::Ok,
+    }
+}
+
+/// The glyph for how a module ended, in its color.
+pub(super) fn mark_glyph(mark: &Mark, theme: &Theme) -> String {
+    match mark {
+        Mark::Ok => theme.green(theme.glyph(Glyph::Ok)),
+        Mark::Warn => theme.yellow(theme.glyph(Glyph::Warn)),
+        Mark::Bad => theme.red(theme.glyph(Glyph::Bad)),
+        Mark::Skipped => theme.dim(theme.glyph(Glyph::Skipped)),
     }
 }
 
@@ -484,10 +494,7 @@ fn final_rows(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Ve
         };
         let glyph = match mark {
             None => theme.dim(theme.glyph(Glyph::Neutral)),
-            Some(Mark::Ok) => theme.green(theme.glyph(Glyph::Ok)),
-            Some(Mark::Warn) => theme.yellow(theme.glyph(Glyph::Warn)),
-            Some(Mark::Bad) => theme.red(theme.glyph(Glyph::Bad)),
-            Some(Mark::Skipped) => theme.dim(theme.glyph(Glyph::Skipped)),
+            Some(mark) => mark_glyph(&mark, theme),
         };
         let text = match graded(report, label, width, theme) {
             Some(grade) => grade,
@@ -625,7 +632,7 @@ fn hint(report: &Report, verbose: bool, theme: &Theme) -> Vec<String> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(super) mod tests {
     use std::time::Duration;
 
     use insite_core::collect::progress::{Part, Phase};
@@ -645,7 +652,7 @@ mod tests {
     }
 
     /// The line without its SGR sequences.
-    fn strip(line: &str) -> String {
+    pub(in crate::live) fn strip(line: &str) -> String {
         let mut out = String::new();
         let mut escape = false;
         for c in line.chars() {
@@ -659,7 +666,7 @@ mod tests {
         out
     }
 
-    fn plain(lines: &[String]) -> Vec<String> {
+    pub(in crate::live) fn plain(lines: &[String]) -> Vec<String> {
         lines.iter().map(|l| strip(l)).collect()
     }
 
@@ -681,7 +688,7 @@ mod tests {
         })
     }
 
-    fn every_escape_is_sgr(text: &str) {
+    pub(in crate::live) fn every_escape_is_sgr(text: &str) {
         let mut rest = text;
         while let Some(at) = rest.find('\x1b') {
             let after = &rest[at + 1..];

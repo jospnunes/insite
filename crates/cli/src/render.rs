@@ -269,7 +269,7 @@ fn browser_line(b: &insite_core::analyze::browser::Browser, s: &Style) -> String
     parts.join(" · ")
 }
 
-fn metric_value(name: &str, value: f64) -> String {
+pub(crate) fn metric_value(name: &str, value: f64) -> String {
     match name {
         "cls" => format!("{value:.2}"),
         "tbt" => format!("{value:.0} ms"),
@@ -323,6 +323,13 @@ fn browser_update_text(report: &Report, color: bool, verbose: bool, width: usize
         let _ = writeln!(out, "\n{}", s.yellow(&format!("browser: {reason}")));
     }
     out
+}
+
+/// The `-v` browser section as text, for the live view's second act. Neutralized like `terminal`.
+pub(crate) fn browser_details_text(report: &Report, color: bool, width: usize) -> String {
+    let mut out = String::new();
+    browser_details(&mut out, report, &Style::new(color), width);
+    neutralize(&out, color)
 }
 
 fn browser_details(out: &mut String, report: &Report, s: &Style, width: usize) {
