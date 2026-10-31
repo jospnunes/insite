@@ -6,6 +6,7 @@ pub mod connect;
 pub mod deadline;
 pub mod dns;
 pub mod http;
+pub mod progress;
 pub mod proxy;
 pub mod records;
 pub mod target;
@@ -29,6 +30,7 @@ use crate::snapshot::{
 use deadline::Deadline;
 use dns::{Resolved, Resolver};
 use http::Sender;
+use progress::{Part, Phase, Progress, ProgressSender, emit};
 use proxy::ProxyConfig;
 use target::Target;
 use tls::Tls;
@@ -60,6 +62,8 @@ pub struct Options {
     /// Turns true to stop collecting (Ctrl-C): the snapshot then closes with
     /// what has arrived, as when the deadline passes.
     pub stop: Option<tokio::sync::watch::Receiver<bool>>,
+    /// Receives progress events while collecting; `None` sends and builds nothing.
+    pub progress: Option<ProgressSender>,
 }
 
 /// Which optional pieces to collect; `-m` turns off what its modules do not need.
@@ -103,6 +107,7 @@ impl Options {
             proxy: ProxyConfig::default(),
             fetch: Fetch::for_modules(Selection::all()),
             stop: None,
+            progress: None,
         }
     }
 }
@@ -136,6 +141,8 @@ impl Collector {
 
         let mut main = Session::new(self, opts, t0, deadline.clone());
         main.spawn_aux = opts.fetch.robots_and_sitemap || opts.fetch.security_txt;
+        // Only the main chain reports phases: not the port 80 check, not the auxiliary files.
+        main.progress = opts.progress.clone();
         let mut side = Session::new(self, opts, t0, deadline.clone());
         let check_url = (opts.fetch.http_check && target.url.scheme() == "https" && !target.explicit_port).then(|| {
             let mut url = target.url.clone();
@@ -151,7 +158,14 @@ impl Collector {
         let mut chain = Vec::new();
         let mut visited = HashSet::new();
         let (main_result, check_step, input_records) = tokio::join!(
-            main.follow(target.url.clone(), &mut chain, &mut visited),
+            async {
+                let result = main.follow(target.url.clone(), &mut chain, &mut visited).await;
+                // A failed main chain may still get its page from the port 80 fallback: that settles later.
+                if result.is_ok() {
+                    emit(&opts.progress, Progress::Done(Part::Page));
+                }
+                result
+            },
             async {
                 match &check_url {
                     Some(url) => Some(side.step(url, opts.body_limit).await),
@@ -159,10 +173,12 @@ impl Collector {
                 }
             },
             async {
-                match &input_host {
+                let records = match &input_host {
                     Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Input, &deadline).await),
                     None => None,
-                }
+                };
+                emit(&opts.progress, Progress::Done(Part::Records(DomainRole::Input)));
+                records
             }
         );
 
@@ -193,6 +209,7 @@ impl Collector {
             },
             Err(failure) => HttpCheck::Failed(failure.clone()),
         });
+        emit(&opts.progress, Progress::Done(Part::HttpCheck));
 
         let (mut page, mut failure, mut https_fallback) = (None, None, None);
         match main_result {
@@ -226,6 +243,7 @@ impl Collector {
                     }
                     None => failure = Some(main_failure),
                 }
+                emit(&opts.progress, Progress::Done(Part::Page));
             }
         }
 
@@ -252,7 +270,7 @@ impl Collector {
         });
         let (auxiliary, final_records) = tokio::join!(
             async {
-                match (aux_task, &final_url) {
+                let auxiliary = match (aux_task, &final_url) {
                     (Some(task), _) => deadline.run(task).await.and_then(Result::ok),
                     // The page came another way (fallback to port 80): fetch now.
                     (None, Some(url)) if wants_aux => Some(
@@ -269,13 +287,18 @@ impl Collector {
                         .await,
                     ),
                     _ => None,
-                }
+                };
+                emit(&opts.progress, Progress::Done(Part::Auxiliary));
+                auxiliary
             },
             async {
-                match &other_domain {
+                let records = match &other_domain {
                     Some(host) => Some(records::collect(&self.resolver, host, DomainRole::Final, &deadline).await),
                     None => None,
-                }
+                };
+                // Also when the final domain is the input one and nothing more was looked up.
+                emit(&opts.progress, Progress::Done(Part::Records(DomainRole::Final)));
+                records
             }
         );
         let dns: Vec<DomainRecords> = input_records.into_iter().chain(final_records).collect();
@@ -289,6 +312,7 @@ impl Collector {
             Some(ip) if !ip.is_loopback() => deadline.run(asn::lookup(&self.resolver, ip)).await,
             _ => None,
         };
+        emit(&opts.progress, Progress::Done(Part::Asn));
         let deadline_hit = main.deadline_hit || side.deadline_hit || deadline.passed();
 
         Snapshot {
@@ -464,6 +488,9 @@ struct Session<'a> {
     /// Start the auxiliary requests when the final response's headers arrive.
     spawn_aux: bool,
     aux: Option<AuxRun>,
+    /// Set on the main session only. `hop` is the chain index of the request in flight.
+    progress: Option<ProgressSender>,
+    hop: usize,
 }
 
 enum Expired {
@@ -484,6 +511,8 @@ impl<'a> Session<'a> {
             deadline_hit: false,
             spawn_aux: false,
             aux: None,
+            progress: None,
+            hop: 0,
         }
     }
 
@@ -503,7 +532,20 @@ impl<'a> Session<'a> {
                 let message = format!("more than {} redirects", self.opts.max_redirects);
                 return Err(failure(FailureKind::TooManyRedirects, &url, message));
             }
+            self.hop = chain.len();
             let step = self.step(&url, self.opts.body_limit).await?;
+            if let (Some(next), true) = (&step.next, self.progress.is_some()) {
+                emit(
+                    &self.progress,
+                    Progress::Redirect {
+                        hop: self.hop,
+                        from: step.hop.url.clone(),
+                        to: next.to_string(),
+                        status: step.hop.status,
+                        took: step.hop.ttfb + step.hop.download,
+                    },
+                );
+            }
             chain.push(step.hop);
             match step.next {
                 Some(next) => url = next,
@@ -608,6 +650,14 @@ impl<'a> Session<'a> {
             Err(_) => return Err(self.timed_out(url, "response headers")),
         };
         let headers_at = Instant::now();
+        emit(
+            &self.progress,
+            Progress::Phase {
+                hop: self.hop,
+                phase: Phase::Ttfb,
+                took: headers_at - sent,
+            },
+        );
         let version = sender.version();
 
         let status = response.status().as_u16();
@@ -675,6 +725,14 @@ impl<'a> Session<'a> {
         };
         let raw = http::read_body(response.into_body(), limit, &self.deadline).await;
         hop.download = headers_at.elapsed();
+        emit(
+            &self.progress,
+            Progress::Phase {
+                hop: self.hop,
+                phase: Phase::Download,
+                took: hop.download,
+            },
+        );
         self.deadline_hit |= raw.deadline_hit;
         if next.is_none()
             && let Some(done) = self.aux.as_mut().and_then(|a| a.body_done.take())
@@ -714,6 +772,7 @@ impl<'a> Session<'a> {
             Host::Domain(name) => match self.addresses.get(name) {
                 Some(cached) => cached.clone(),
                 None => {
+                    let dns_started = Instant::now();
                     let resolved = match self
                         .within(Some(DNS_TIMEOUT), self.collector.resolver.resolve(name))
                         .await
@@ -731,6 +790,14 @@ impl<'a> Session<'a> {
                         }
                         Err(Expired::Global) => return Err(self.timed_out(url, "DNS")),
                     };
+                    emit(
+                        &self.progress,
+                        Progress::Phase {
+                            hop: self.hop,
+                            phase: Phase::Dns,
+                            took: resolved.resolution.duration.unwrap_or_else(|| dns_started.elapsed()),
+                        },
+                    );
                     let addresses = resolved.resolution.addresses.clone();
                     self.addresses.insert(name.clone(), addresses.clone());
                     if via.is_none() {
@@ -771,6 +838,14 @@ impl<'a> Session<'a> {
             }
             Err(Expired::Global) => return Err(self.timed_out(url, "TCP connection")),
         };
+        emit(
+            &self.progress,
+            Progress::Phase {
+                hop: self.hop,
+                phase: Phase::Tcp,
+                took: connected.tcp,
+            },
+        );
         let mut stream = connected.stream;
         if let Some(proxy) = &via {
             match self
@@ -816,6 +891,14 @@ impl<'a> Session<'a> {
                 }
                 Err(Expired::Global) => return Err(self.timed_out(url, "TLS handshake")),
             };
+            emit(
+                &self.progress,
+                Progress::Phase {
+                    hop: self.hop,
+                    phase: Phase::Tls,
+                    took: tls.handshake,
+                },
+            );
             let version = if tls.alpn.as_deref() == Some("h2") {
                 HttpVersion::Http2
             } else {

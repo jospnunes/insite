@@ -11,12 +11,13 @@ use hyper::body::Bytes;
 use insite_core::analyze::analyze;
 use insite_core::analyze::network::HttpsEnforcement;
 use insite_core::collect::http::ACCEPT_ENCODING_VALUE;
+use insite_core::collect::progress::{Part, Phase, Progress};
 use insite_core::collect::proxy::ProxyConfig;
 use insite_core::collect::target::Target;
 use insite_core::collect::{Collector, Options, Ports};
 use insite_core::report::{Outcome, Status};
 use insite_core::snapshot::{
-    CertProblem, ConnectionUse, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
+    CertProblem, ConnectionUse, DomainRole, FailureKind, HttpCheck, HttpVersion, RequestProfile, Snapshot, Verification,
 };
 use server::{Server, TlsMode, ok, redirect};
 
@@ -125,6 +126,70 @@ async fn same_origin_redirect_reuses_the_connection() {
     assert!(net.phases.unwrap().connection_reused);
     assert!(net.final_url.unwrap().ends_with("/new"));
     assert_eq!(report.outcome, Outcome::Complete);
+}
+
+/// The events follow the chain: phases of the first connection, the redirect, the
+/// second hop without connection phases (reused), then the page is done.
+#[tokio::test(flavor = "multi_thread")]
+async fn progress_follows_the_chain() {
+    let server = Server::start(TlsMode::Tls(H1_ONLY), 0, |req| async move {
+        match req.uri().path() {
+            "/a" => redirect(301, "/b"),
+            _ => ok("page b"),
+        }
+    })
+    .await;
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut opts = options();
+    opts.progress = Some(tx);
+    let snap = collect(&server, "/a", true, &opts).await;
+    assert_eq!(snap.chain.len(), 2, "{:?}", snap.failure);
+    assert!(matches!(snap.chain[1].connection, ConnectionUse::Reused));
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    let position = |wanted: &dyn Fn(&Progress) -> bool, from: usize| {
+        events[from..]
+            .iter()
+            .position(wanted)
+            .map(|i| i + from)
+            .unwrap_or_else(|| panic!("event missing after {from}: {events:?}"))
+    };
+    let phase = |hop, phase| move |e: &Progress| matches!(e, Progress::Phase { hop: h, phase: p, .. } if *h == hop && *p == phase);
+    let mut at = position(&phase(0, Phase::Dns), 0);
+    at = position(&phase(0, Phase::Tcp), at);
+    at = position(&phase(0, Phase::Tls), at);
+    at = position(&phase(0, Phase::Ttfb), at);
+    at = position(
+        &|e| matches!(e, Progress::Redirect { hop: 0, status: 301, to, .. } if to.ends_with("/b")),
+        at,
+    );
+    at = position(&phase(1, Phase::Ttfb), at);
+    at = position(&phase(1, Phase::Download), at);
+    position(&|e| *e == Progress::Done(Part::Page), at);
+
+    for connection_phase in [Phase::Dns, Phase::Tcp, Phase::Tls] {
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, Progress::Phase { hop: 1, phase, .. } if *phase == connection_phase)),
+            "{events:?}"
+        );
+    }
+    // Every part is reported exactly once, also those that did not run.
+    for part in [Part::Page, Part::HttpCheck, Part::Auxiliary, Part::Asn] {
+        let n = events.iter().filter(|e| **e == Progress::Done(part)).count();
+        assert_eq!(n, 1, "{part:?} in {events:?}");
+    }
+    for role in [DomainRole::Input, DomainRole::Final] {
+        let n = events
+            .iter()
+            .filter(|e| **e == Progress::Done(Part::Records(role)))
+            .count();
+        assert_eq!(n, 1, "{role:?} in {events:?}");
+    }
 }
 
 /// `user:pass@` in the input or in a redirect never reaches the snapshot.
