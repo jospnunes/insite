@@ -11,6 +11,7 @@ First release. insite is a command-line tool that gives a full X-ray of a websit
 - Security grade from A+ to F, following the MDN HTTP Observatory scoring.
 - `--browser` adds Core Web Vitals and the stack only JavaScript reveals; `--throttle` makes them comparable to Lighthouse mobile.
 - Output: terminal, `--json`, `--ndjson`, `--md`.
+- Live terminal output: on an interactive terminal the analysis is drawn as it happens (request phases as bars, modules settling one by one, the browser step and the batch table), and the final screen stays in the scrollback. It turns itself off for pipes and files, `--json`, `--ndjson`, `--md`, `NO_COLOR` and `TERM=dumb`, where the output is the same plain text as before.
 - Batch mode: several sites as arguments or on standard input.
 - `--save` and `--from` store and re-analyze snapshots without network.
 - `insite explain <id>` describes a finding and how to fix it; `insite update` fetches the newest signatures; your own signatures can be added.
@@ -25,7 +26,7 @@ First release. insite is a command-line tool that gives a full X-ray of a websit
 
 - Analysis overhead is a median of 130 ms on that VPS (60 to 100 ms on a laptop), above the 50 ms target. Accepted for now.
 - `--browser` does not run on Windows yet; the browser module reports that it is not available on this platform.
-- On the classic Windows console (conhost) colours may show as escape codes and the width defaults to 100 columns; set `NO_COLOR` or use Windows Terminal.
+- On the Windows console, colours and width go through crossterm and have not been checked by hand; set `NO_COLOR` for plain text.
 - The security grade does not reproduce the Observatory's CORS -50 case, which needs a cross-origin request.
 - Sites that challenge non-browser clients give a partial report (exit code 3).
 - No published JSON Schema yet; key on finding `id` and `params`.

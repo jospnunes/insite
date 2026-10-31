@@ -144,6 +144,57 @@ paths, or set `CHROME_PATH`). It runs on Linux and macOS; Windows support is
 planned. Metrics are lab measurements and always carry their profile: an LCP
 measured without throttling is not the PageSpeed one.
 
+**Live output.** On an interactive terminal, with the default text format, insite
+draws the analysis as it happens: each request phase fills in as a bar the
+moment it finishes, redirects appear as they are followed, and every module
+spins until its data arrives and then settles on its verdict (✓, ▲ or ✗) with
+its summary. With `--browser`, the browser step gets its own second part; with
+several sites, a table fills in row by row. When it ends, the final screen stays
+in the scrollback, so you can scroll and copy it. Colours are 24-bit when
+`COLORTERM` says `truecolor` or `24bit`, and the 16-colour palette otherwise;
+without UTF-8 in the locale, the symbols fall back to ASCII; below 60 columns
+the bars go away and the lines become compact. The animation only draws what the
+analysis already produced and never delays it. `--from` on an interactive
+terminal shows the same final screen, without animation.
+
+```
+◆ insite 0.1.0                                                                                  g1.globo.com
+
+  ┌ dns      ███████████▊                                                                        15 ms
+  │ tcp                 ███████▎                                                                9.1 ms
+  │ tls                         ███████▊                                                        9.7 ms
+  │ ttfb                               █████████████████▎                                        21 ms
+  │ download                                             █████████████▎                          16 ms
+  └ 100 ms  200 · HTTP/2 · no IPv6 · 186.192.83.7 · AS28604 Globo Comunicacao e Participacoes SA
+    HTTPS enforced
+
+✓ tls       DigiCert Inc · TLS 1.3 · expires in 52 days
+✓ dns       ns04.globo.com · no DNSSEC · CAA
+✓ email     smtp.globo.com · SPF -all · DMARC p=none · DKIM default
+▲ security   F  ████████████ 0/100
+▲ stack     React · Google Tag Manager · jQuery 1.8.3 · reCAPTCHA
+· services  Microsoft 365 · Salesforce · Meta
+✓ seo       indexable · 1 issue
+✓ weight    HTML 152 KB (877 KB uncompressed) · 14 scripts · 1 third party in the HTML
+
+  8 things to look at
+  ▲ medium    Content Security Policy allows inline or arbitrary scripts  sec.csp.unsafe_inline
+  ▲ medium    No HSTS                                                     sec.hsts.missing
+  ▲ medium    Scripts from other domains loaded insecurely                sec.sri.insecure
+  …
+
+  insite explain sec.csp.unsafe_inline   ·   -v for evidence   ·   --json
+```
+
+(Findings trimmed; this is the screen left behind when the run ends.)
+
+It turns itself off, and the output becomes exactly the plain text shown at the
+top, when standard output is a pipe or a file, with `--json`, `--ndjson` or
+`--md`, when `NO_COLOR` is set to anything non-empty, or when `TERM` is `dumb`.
+On the Windows console, colours and width go through
+[crossterm](https://github.com/crossterm-rs/crossterm) and have not been checked
+by hand; `NO_COLOR` gives the plain text there.
+
 **Own signatures:** files in the webappanalyzer format in
 `~/.config/insite/fingerprints/*.json` (macOS: `~/Library/Application
 Support/insite`, Windows: `%APPDATA%\insite`) are added to the embedded ones and
