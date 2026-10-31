@@ -1,3 +1,5 @@
+#[cfg(test)]
+mod doc_checks;
 mod explain;
 mod live;
 mod markdown;
