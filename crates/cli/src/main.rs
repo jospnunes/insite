@@ -159,8 +159,9 @@ fn main() -> ExitCode {
     } else if args.md {
         Format::Markdown
     } else {
+        let no_color = std::env::var_os("NO_COLOR").is_some_and(|v| !v.is_empty());
         Format::Terminal {
-            color: stdout_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()) && style::enable_ansi(),
+            color: stdout_tty && !no_color && style::enable_ansi(),
             verbose: args.verbose,
             width: style::terminal_width(),
         }

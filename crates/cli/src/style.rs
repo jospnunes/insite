@@ -1,5 +1,7 @@
 //! ANSI styling written by hand, and the terminal width.
 
+use std::io::IsTerminal;
+
 pub struct Style {
     color: bool,
 }
@@ -81,7 +83,12 @@ fn own_sgr(text: &str) -> Option<usize> {
 
 /// Columns of the terminal on stdout, or `COLUMNS`, or 100.
 pub fn terminal_width() -> usize {
-    let size = crossterm::terminal::size().ok().map(|(columns, _)| columns);
+    // Only a terminal on stdout is measured: crossterm would otherwise fall back to the
+    // controlling tty or `tput`, and redirected output must keep using COLUMNS, then 100.
+    let size = std::io::stdout()
+        .is_terminal()
+        .then(|| crossterm::terminal::size().ok().map(|(columns, _)| columns))
+        .flatten();
     width_from(size, std::env::var("COLUMNS").ok().as_deref())
 }
 
