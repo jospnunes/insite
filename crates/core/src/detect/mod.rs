@@ -10,7 +10,7 @@ mod inputs;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use aho_corasick::{AhoCorasick, AhoCorasickKind};
 use insite_sigc::index::{DomCheck, Engine as RegexEngine, Field, Index, Pattern};
@@ -139,6 +139,35 @@ pub fn use_local_data(cache: Option<PathBuf>, config: Option<PathBuf>) {
     let _ = LOCAL.set(LocalData { cache, config });
 }
 
+/// Warnings about signature files, held back while `Some`.
+static WARNINGS: Mutex<Option<Vec<String>>> = Mutex::new(None);
+
+/// Holds back the warnings the engine prints while it loads its signatures (a bad updated
+/// index, a bad custom file), for a caller that owns the terminal and cannot have stderr
+/// written under it. They wait for `take_warnings`. Call before `warm_up`; without it they
+/// go to stderr as they happen.
+pub fn defer_warnings() {
+    *WARNINGS.lock().unwrap_or_else(PoisonError::into_inner) = Some(Vec::new());
+}
+
+/// The warnings held back since `defer_warnings`, in the order they happened. Afterwards
+/// warnings are printed again as they happen.
+pub fn take_warnings() -> Vec<String> {
+    WARNINGS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .take()
+        .unwrap_or_default()
+}
+
+/// Reports a problem with the signatures: held back if asked to, else printed on stderr.
+fn warn(message: String) {
+    match WARNINGS.lock().unwrap_or_else(PoisonError::into_inner).as_mut() {
+        Some(held) => held.push(message),
+        None => eprintln!("{message}"),
+    }
+}
+
 /// The detection engine. Building takes tens of milliseconds; call `warm_up`
 /// at t = 0 so it happens while the network works.
 pub fn engine() -> &'static Engine {
@@ -177,18 +206,18 @@ fn load_index() -> (Index, Origin) {
             .map_err(|e| e.to_string())
             .and_then(|b| serde_json::from_slice::<Index>(&b).map_err(|e| e.to_string()))
         {
-            Ok(updated) if updated.format != insite_sigc::index::FORMAT => eprintln!(
+            Ok(updated) if updated.format != insite_sigc::index::FORMAT => warn(format!(
                 "insite: ignoring {}: index format {} (this insite reads {}); run insite update",
                 path.display(),
                 updated.format,
                 insite_sigc::index::FORMAT
-            ),
+            )),
             Ok(updated) if updated.source_date > index.source_date => {
                 index = updated;
                 origin.updated = true;
             }
             Ok(_) => {}
-            Err(e) => eprintln!("insite: ignoring {}: {e}", path.display()),
+            Err(e) => warn(format!("insite: ignoring {}: {e}", path.display())),
         }
     }
 
@@ -204,7 +233,7 @@ fn load_index() -> (Index, Origin) {
                 index.merge(custom);
             }
             Ok(None) => {}
-            Err(e) => eprintln!("insite: ignoring custom signatures in {}: {e}", dir.display()),
+            Err(e) => warn(format!("insite: ignoring custom signatures in {}: {e}", dir.display())),
         }
     }
     (index, origin)

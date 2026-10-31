@@ -297,3 +297,17 @@ fn the_origin_is_in_the_json() {
     assert_eq!(json["origin"], "certificate");
     assert!(json.get("priority").is_none());
 }
+
+#[test]
+fn warnings_are_held_back_until_taken() {
+    // One test for the shared state: nothing is held unless asked to.
+    warn("not held".into());
+    assert!(take_warnings().is_empty());
+    defer_warnings();
+    warn("first".into());
+    warn("second".into());
+    assert_eq!(take_warnings(), ["first", "second"]);
+    // Taking ends the deferral: the next warning goes to stderr, not into the list.
+    warn("printed".into());
+    assert!(take_warnings().is_empty());
+}

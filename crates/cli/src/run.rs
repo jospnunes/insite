@@ -55,6 +55,10 @@ enum Ready {
 }
 
 pub fn run(mut plan: Plan) -> ExitCode {
+    if matches!(plan.format, Format::Live { .. }) {
+        // The live view owns the terminal: the engine's warnings wait until it gives it back.
+        insite_core::detect::defer_warnings();
+    }
     if plan.selection.contains(ModuleName::Stack) {
         // Builds the signature engine while the network works.
         insite_core::detect::warm_up();
@@ -89,11 +93,15 @@ pub fn run(mut plan: Plan) -> ExitCode {
         }
     }
     if targets.is_empty() {
+        print_held_warnings();
         return printer.finish();
     }
     let mut save = match plan.save.as_deref().map(Writer::create).transpose() {
         Ok(w) => w,
-        Err(e) => return crate::usage_error(&e),
+        Err(e) => {
+            print_held_warnings();
+            return crate::usage_error(&e);
+        }
     };
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
@@ -288,6 +296,7 @@ pub fn run(mut plan: Plan) -> ExitCode {
     if let Some(thread) = ui_thread {
         let _ = thread.join();
     }
+    print_held_warnings();
     shut_down(runtime);
     if let Some(writer) = save
         && let Err(e) = writer.finish()
@@ -317,6 +326,14 @@ fn live_label(target: &Target) -> String {
     match target.url.port() {
         Some(port) => format!("{host}:{port}"),
         None => host,
+    }
+}
+
+/// Prints on stderr the signature warnings held back for the live view (none when it was not
+/// asked for: they were printed as they happened).
+fn print_held_warnings() {
+    for warning in insite_core::detect::take_warnings() {
+        eprintln!("{warning}");
     }
 }
 
