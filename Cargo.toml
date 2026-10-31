@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.89"
 license = "GPL-3.0-or-later"
+authors = ["José Pedro Pereira <contato@synthsolutions.com.br>"]
 repository = "https://github.com/jospnunes/insite"
 homepage = "https://github.com/jospnunes/insite"
 
