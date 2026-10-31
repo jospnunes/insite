@@ -28,7 +28,7 @@ fuzz paths or probe for vulnerabilities.
 
 ## Timing
 
-`scripts/measure-time.py` measures the claim of "about a second".
+The "about a second" figure comes from `scripts/measure-time.py`.
 
 The script runs the reference list one site at a time, each in its own
 process, so a site's time is not shared with others. The time includes what a
@@ -58,8 +58,9 @@ The analysis overhead is above the 50 ms target. That is accepted for now.
 ## Precision of the stack detection
 
 Detection uses the [webappanalyzer](https://github.com/enthec/webappanalyzer)
-signatures, about 7,600 technologies. Each detection carries its
-evidence.
+signatures: 7,647 technologies in the embedded set, as the build report
+(`sigc-report.txt`, written by `crates/core/build.rs`) counts them. Each
+detection carries its evidence.
 
 Precision comes from 20 sites of the reference list, with detections labeled by
 hand (`bench/labels.tsv`). Each detection gets a verdict: correct, wrong (the
@@ -94,8 +95,10 @@ insite shows a grade only when the response represents the site: no bot challeng
 no error status. Responses that are not HTML get a grade, as in the
 Observatory.
 
-Comparison: on 26 sites, compared with the Observatory's published scans,
-grade and score matched wherever both saw the same page.
+Comparison: we ran insite on 26 sites and compared grade and score with the
+Observatory's published scans of the same sites. They matched wherever both saw
+the same page. The repository does not record the date of this comparison or
+the list of 26 sites.
 
 One gap is known. The CORS test's -50 case needs a request with an `Origin`
 from another origin. insite does not send one, so it does not apply that
