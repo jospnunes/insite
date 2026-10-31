@@ -23,8 +23,11 @@ env:
 jobs:
   packages:
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    concurrency:
+      group: publish-packages
+      cancel-in-progress: false
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ inputs.plan }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
@@ -33,6 +36,7 @@ jobs:
 
       - name: Read the tag from the plan
         run: |
+          set -euo pipefail
           tag=$(printf '%s' "$PLAN" | jq -r '.announcement_tag')
           if [ -z "$tag" ] || [ "$tag" = "null" ]; then
             echo "::error::announcement_tag is missing from the dist plan"
@@ -43,6 +47,7 @@ jobs:
 
       - name: Install nfpm
         run: |
+          set -euo pipefail
           file="nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
           curl -fsSL -o "$RUNNER_TEMP/$file" \
             "https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/$file"
@@ -52,9 +57,12 @@ jobs:
           echo "NFPM=$RUNNER_TEMP/nfpm/nfpm" >> "$GITHUB_ENV"
 
       - name: Download the musl archives
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
           mkdir -p "$RUNNER_TEMP/dl"
-          gh release download "$TAG" --dir "$RUNNER_TEMP/dl" \
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$RUNNER_TEMP/dl" \
             --pattern 'insite-x86_64-unknown-linux-musl.tar.xz*' \
             --pattern 'insite-aarch64-unknown-linux-musl.tar.xz*'
           cd "$RUNNER_TEMP/dl"
@@ -63,6 +71,7 @@ jobs:
 
       - name: Build the packages
         run: |
+          set -euo pipefail
           out="$RUNNER_TEMP/packages"
           mkdir -p "$out"
           for arch in x86_64 aarch64; do
@@ -76,8 +85,18 @@ jobs:
             fi
             pkg/build-packages.sh "$VERSION" "$arch" "$bin" "$out"
           done
+          # One "<hash>  <filename>" checksum file next to each package.
+          cd "$out"
+          for f in *.deb *.rpm; do
+            sha256sum "$f" > "$f.sha256"
+          done
           ls -l "$out"
 
       - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "$TAG" "$RUNNER_TEMP"/packages/*.deb "$RUNNER_TEMP"/packages/*.rpm --clobber
+          set -euo pipefail
+          cd "$RUNNER_TEMP/packages"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            ./*.deb ./*.rpm ./*.deb.sha256 ./*.rpm.sha256

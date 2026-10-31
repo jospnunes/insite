@@ -1,8 +1,9 @@
 # Publishes the insite-bin package to the AUR from the released musl archives.
 # Called by the dist "host" step (see dist-workspace.toml); it runs after the
 # release exists. Needs the AUR_SSH_KEY secret: the private key of an AUR
-# account that maintains insite-bin. Only our own shell steps touch the key;
-# no third-party action receives it.
+# account that maintains insite-bin. The key is set only in the env of the two
+# shell steps that need it (the check and the SSH setup); no other step, and no
+# third-party action, receives it.
 name: Publish to the AUR
 
 on:
@@ -23,13 +24,19 @@ permissions:
 jobs:
   aur:
     runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    concurrency:
+      group: publish-aur
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       PLAN: ${{ inputs.plan }}
-      AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
     steps:
       - name: Check the AUR key is set
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
         run: |
+          set -euo pipefail
           if [ -z "$AUR_SSH_KEY" ]; then
             echo "::error::AUR_SSH_KEY is not set"
             exit 1
@@ -55,7 +62,7 @@ jobs:
           set -euo pipefail
           dl="$RUNNER_TEMP/dl"
           mkdir -p "$dl"
-          gh release download "$TAG" --dir "$dl" \
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dl" \
             --pattern 'insite-x86_64-unknown-linux-musl.tar.xz.sha256' \
             --pattern 'insite-aarch64-unknown-linux-musl.tar.xz.sha256'
           # Each file reads "<hash> *<archive name>"; only the hash is needed.
@@ -69,6 +76,8 @@ jobs:
           cat "$RUNNER_TEMP/aur-files/PKGBUILD"
 
       - name: Set up SSH for the AUR
+        env:
+          AUR_SSH_KEY: ${{ secrets.AUR_SSH_KEY }}
         run: |
           set -euo pipefail
           ssh_dir="$RUNNER_TEMP/ssh"
@@ -108,4 +117,6 @@ jobs:
 
       - name: Remove the SSH key
         if: always()
-        run: rm -rf "$RUNNER_TEMP/ssh"
+        run: |
+          set -euo pipefail
+          rm -rf "$RUNNER_TEMP/ssh"

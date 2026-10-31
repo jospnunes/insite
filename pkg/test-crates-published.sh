@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks pkg/crates-published.sh against the live crates.io API.
-# Uses serde 1.0.0 (published) and insite 0.1.0 (must not be on crates.io yet).
+# Uses serde 1.0.0 (published) and insite 999.0.0 (a version that never exists).
 # Never run by CI.
 set -uo pipefail
 
@@ -20,5 +20,5 @@ check() {
 }
 
 check 0 serde 1.0.0
-check 1 insite 0.1.0
+check 1 insite 999.0.0
 exit "$fail"

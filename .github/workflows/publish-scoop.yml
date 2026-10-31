@@ -33,6 +33,7 @@ jobs:
         env:
           SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
         run: |
+          set -euo pipefail
           if [ -z "$SCOOP_BUCKET_TOKEN" ]; then
             echo "::error::SCOOP_BUCKET_TOKEN is not set"
             exit 1
@@ -96,4 +97,4 @@ jobs:
           fi
           git -c user.name='José Pedro Pereira' -c user.email='contato@synthsolutions.com.br' \
             commit -m "insite: Update to $VERSION"
-          git push origin HEAD
+          git push origin HEAD:main
