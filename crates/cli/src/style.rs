@@ -81,19 +81,28 @@ fn own_sgr(text: &str) -> Option<usize> {
 
 /// Columns of the terminal on stdout, or `COLUMNS`, or 100.
 pub fn terminal_width() -> usize {
-    #[cfg(unix)]
-    {
-        // SAFETY: TIOCGWINSZ only writes a winsize into the struct we pass.
-        let mut size: libc::winsize = unsafe { std::mem::zeroed() };
-        if unsafe { libc::ioctl(libc::STDOUT_FILENO, libc::TIOCGWINSZ, &mut size) } == 0 && size.ws_col > 0 {
-            return usize::from(size.ws_col);
-        }
-    }
-    std::env::var("COLUMNS")
-        .ok()
-        .and_then(|c| c.parse().ok())
-        .filter(|&c: &usize| c > 0)
+    let size = crossterm::terminal::size().ok().map(|(columns, _)| columns);
+    width_from(size, std::env::var("COLUMNS").ok().as_deref())
+}
+
+fn width_from(size: Option<u16>, columns: Option<&str>) -> usize {
+    size.filter(|&c| c > 0)
+        .map(usize::from)
+        .or_else(|| columns.and_then(|c| c.parse().ok()).filter(|&c: &usize| c > 0))
         .unwrap_or(100)
+}
+
+/// Makes the terminal understand ANSI escapes. Only Windows needs work (virtual-terminal
+/// processing); it returns whether escapes will be interpreted.
+pub fn enable_ansi() -> bool {
+    #[cfg(windows)]
+    {
+        crossterm::ansi_support::supports_ansi()
+    }
+    #[cfg(not(windows))]
+    {
+        true
+    }
 }
 
 /// Visible width: characters, not counting ANSI escapes.
@@ -165,6 +174,16 @@ mod tests {
             "\u{fffd}[8mhidden\u{fffd}[2J\u{fffd}[31"
         );
         assert_eq!(neutralize(&painted, false), "\u{fffd}[31mbad\u{fffd}[0m");
+    }
+
+    #[test]
+    fn terminal_width_falls_back_to_columns_then_100() {
+        assert_eq!(width_from(None, Some("72")), 72);
+        assert_eq!(width_from(None, None), 100);
+        assert_eq!(width_from(Some(120), Some("72")), 120);
+        assert_eq!(width_from(None, Some("wide")), 100);
+        assert_eq!(width_from(None, Some("0")), 100);
+        assert_eq!(width_from(Some(0), Some("72")), 72);
     }
 
     #[test]

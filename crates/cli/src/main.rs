@@ -160,7 +160,7 @@ fn main() -> ExitCode {
         Format::Markdown
     } else {
         Format::Terminal {
-            color: stdout_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()),
+            color: stdout_tty && std::env::var_os("NO_COLOR").is_none_or(|v| v.is_empty()) && style::enable_ansi(),
             verbose: args.verbose,
             width: style::terminal_width(),
         }

@@ -25,6 +25,7 @@ url = "2"
 idna = "1"
 flate2 = "1"
 libc = "0.2"
+crossterm = { version = "0.29", default-features = false, features = ["windows"] }
 lol_html = "3"
 encoding_rs = "0.8"
 brotli-decompressor = "6"
