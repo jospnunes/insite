@@ -152,8 +152,10 @@ fn real_size() -> (usize, usize) {
     }
 }
 
-/// The UI thread's loop: take what arrived, move the spinners, wait a tick. Returns the
-/// writer when the channel closes and the terminal has been given back.
+/// The UI thread's loop. It sleeps until an event arrives, the channel closes or the next
+/// tick is due, so a result is drawn, and the terminal given back, at once; the tick
+/// only paces the spinners. Returns the writer when the channel closes and the terminal
+/// has been given back.
 #[allow(clippy::too_many_arguments)]
 fn drive<W: Write>(
     out: W,
@@ -165,23 +167,52 @@ fn drive<W: Write>(
     verbose: bool,
     browser: bool,
 ) -> io::Result<W> {
+    // Only to wait on the channel with a timeout.
+    let waiter = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("tokio runtime");
     let mut ui = Ui::new(out, theme, inputs, selection, verbose, browser);
+    let mut next_tick = Instant::now() + TICK;
     loop {
-        // Read every tick: the terminal may have been resized.
+        let wait = next_tick.saturating_duration_since(Instant::now());
+        let first = waiter.block_on(async { tokio::time::timeout(wait, rx.recv()).await });
+        // Read after waking: the terminal may have been resized meanwhile.
         let (width, height) = size();
-        loop {
-            match rx.try_recv() {
+        // Whether something a person waits for arrived: it is drawn without waiting for a tick.
+        let mut urgent = false;
+        match first {
+            Err(_) => {}
+            Ok(None) => return ui.close(width),
+            Ok(Some(event)) => {
+                urgent |= is_result(&event);
                 // A failed write (the terminal went away) must not stop the draining.
-                Ok(event) => {
-                    let _ = ui.handle(event, width);
+                let _ = ui.handle(event, width);
+                loop {
+                    match rx.try_recv() {
+                        Ok(event) => {
+                            urgent |= is_result(&event);
+                            let _ = ui.handle(event, width);
+                        }
+                        Err(TryRecvError::Empty) => break,
+                        Err(TryRecvError::Disconnected) => return ui.close(width),
+                    }
                 }
-                Err(TryRecvError::Empty) => break,
-                Err(TryRecvError::Disconnected) => return ui.close(width),
             }
         }
-        let _ = ui.tick(width, height);
-        thread::sleep(TICK);
+        let advance = Instant::now() >= next_tick;
+        if advance {
+            next_tick = Instant::now() + TICK;
+        }
+        if advance || urgent {
+            let _ = ui.render(width, height, advance);
+        }
     }
+}
+
+/// Events that change what is on screen beyond a progress step.
+fn is_result(event: &UiEvent) -> bool {
+    !matches!(event, UiEvent::Progress { .. } | UiEvent::Launching { .. })
 }
 
 /// Which view the run needs.
@@ -289,6 +320,9 @@ impl<W: Write> Ui<W> {
                     UiEvent::Fast { .. } => return Ok(()),
                     UiEvent::Full { report, .. } => {
                         let mut lines = Vec::new();
+                        // No Fast came first (its analysis died, which should not happen), so
+                        // nothing is in the scrollback yet: the site block goes out with the
+                        // browser's, and the stack row may repeat.
                         if one.stage == Stage::Collecting {
                             lines = site::final_lines(&report, width, theme, verbose);
                             if one.browser.is_some() {
@@ -339,10 +373,13 @@ impl<W: Write> Ui<W> {
         }
     }
 
-    /// Moves the spinners: commits what became final and redraws what is still live. With
+    /// Commits what became final and redraws what is still live, one spinner frame further
+    /// when `advance`. With
     /// nothing animating there is nothing to redraw.
-    fn tick(&mut self, width: usize, height: usize) -> io::Result<()> {
-        self.frame = self.frame.wrapping_add(1);
+    fn render(&mut self, width: usize, height: usize, advance: bool) -> io::Result<()> {
+        if advance {
+            self.frame = self.frame.wrapping_add(1);
+        }
         let (theme, frame) = (&self.theme, self.frame);
         match &mut self.view {
             View::One(one) => {
@@ -385,7 +422,7 @@ impl<W: Write> Ui<W> {
                     Stage::Done => Vec::new(),
                 };
                 if !lines.is_empty() {
-                    self.region.commit(&lines, width)?;
+                    let _ = self.region.commit(&lines, width);
                 }
             }
             View::Batch(batch) => {
@@ -404,11 +441,12 @@ impl<W: Write> Ui<W> {
                         .collect();
                     lines.extend(details(&sites, width, theme));
                 }
-                self.region.commit(&lines, width)?;
+                let _ = self.region.commit(&lines, width);
             }
         }
-        // The last draw is at today's width, which `finish` reuses to clear what is left.
-        self.region.draw(&[], width)?;
+        // Whatever failed above, the terminal must get its cursor back. The last draw is at
+        // today's width, which `finish` reuses to clear what is left.
+        let _ = self.region.draw(&[], width);
         self.region.finish()
     }
 }
@@ -423,7 +461,11 @@ fn details(sites: &[(Option<&Report>, Option<&Report>)], width: usize, theme: &T
             lines.extend(site::final_lines(report, width, theme, true));
         }
         if let Some(report) = browser {
-            lines.extend(browser::final_lines(report, width, theme, true));
+            let act = browser::final_lines(report, width, theme, true);
+            if site.is_some() && !act.is_empty() {
+                lines.push(String::new());
+            }
+            lines.extend(act);
         }
     }
     lines
@@ -548,7 +590,77 @@ mod tests {
             tx.send(event).unwrap();
         }
         drop(tx);
-        String::from_utf8(thread.join().expect("the UI thread ends")).unwrap()
+        String::from_utf8(join(thread, Duration::from_secs(5))).unwrap()
+    }
+
+    /// Joins the UI thread, failing instead of hanging when it does not end in time.
+    fn join<T: Send + 'static>(thread: JoinHandle<T>, within: Duration) -> T {
+        let (done, wait) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let _ = done.send(thread.join());
+        });
+        wait.recv_timeout(within)
+            .expect("the UI thread ends in time")
+            .expect("the UI thread does not panic")
+    }
+
+    /// A writer the test can read while the thread still owns it.
+    #[derive(Clone, Default)]
+    struct Shared(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl Shared {
+        fn text(&self) -> String {
+            String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+        }
+    }
+
+    #[test]
+    fn an_idle_ui_ends_promptly_when_the_sender_drops() {
+        // Two ticks are 160 ms: ending in well under one means the thread did not sleep
+        // through a tick before noticing.
+        for browser in [false, true] {
+            let (tx, thread) = spawn_ui_with(
+                Vec::new(),
+                100,
+                24,
+                hosts(&["a.example", "b.example"]),
+                Selection::all(),
+                false,
+                browser,
+            );
+            thread::sleep(Duration::from_millis(30));
+            let dropped = Instant::now();
+            drop(tx);
+            join(thread, Duration::from_secs(5));
+            assert!(dropped.elapsed() < Duration::from_millis(40), "{:?}", dropped.elapsed());
+        }
+    }
+
+    #[test]
+    fn a_result_is_drawn_without_waiting_for_a_tick() {
+        let out = Shared::default();
+        let names = hosts(&["a.example", "b.example"]);
+        let (tx, thread) = spawn_ui_with(out.clone(), 100, 24, names, Selection::all(), false, false);
+        // The first tick is 80 ms after the start; the row must be out well before it.
+        tx.send(full(0)).unwrap();
+        let sent = Instant::now();
+        while !visible(&out.text()).contains("a.example") {
+            assert!(sent.elapsed() < Duration::from_millis(60), "not drawn in time");
+            thread::sleep(Duration::from_millis(1));
+        }
+        drop(tx);
+        join(thread, Duration::from_secs(5));
     }
 
     /// The text of the screen lines, without any escape sequence.
@@ -618,24 +730,37 @@ mod tests {
     fn the_browser_run_freezes_the_fast_report_before_its_own_act() {
         let mut fast = full_report();
         fast.modules.browser = Module::skipped("the browser is still loading the page");
-        let events = vec![
-            UiEvent::Launching { site: 0 },
-            UiEvent::Fast {
-                site: 0,
-                report: Box::new(fast.clone()),
-            },
-            // Long enough for a tick to draw the browser row.
-            UiEvent::Message("between".to_owned()),
-            full(0),
-        ];
-        let text = run_ui(&["example.com"], false, true, events);
-        let screen = visible(&text);
-        // The stack row is printed by the fast report and again by the browser act,
-        // which replaces it with the completed one: the fast one is not printed twice.
+        let out = Shared::default();
+        let (tx, thread) = spawn_ui_with(
+            out.clone(),
+            100,
+            24,
+            hosts(&["example.com"]),
+            Selection::all(),
+            false,
+            true,
+        );
+        tx.send(UiEvent::Launching { site: 0 }).unwrap();
+        tx.send(UiEvent::Fast {
+            site: 0,
+            report: Box::new(fast.clone()),
+        })
+        .unwrap();
+        // The browser row spins for a few frames before the complete report arrives.
+        thread::sleep(Duration::from_millis(200));
+        tx.send(full(0)).unwrap();
+        drop(tx);
+        join(thread, Duration::from_secs(5));
+        let text = out.text();
         let frozen = site::final_lines(&fast, 100, &theme(), false);
-        let first = frozen.iter().find(|l| l.contains("-v for evidence")).unwrap();
-        assert_eq!(text.matches(first.as_str()).count(), 1, "{screen}");
-        assert!(screen.find("between").unwrap() > screen.rfind("-v for evidence").unwrap() - 200);
+        let hint = frozen.iter().find(|l| l.contains("-v for evidence")).unwrap();
+        // The fast block is committed once, and before the first frame of the browser's act;
+        // the collecting frames before it never mention the browser.
+        assert_eq!(text.matches(hint.as_str()).count(), 1, "{}", visible(&text));
+        let frozen_at = text.find(hint.as_str()).unwrap();
+        let act_at = text.find("launching").expect("the browser row was drawn");
+        assert!(frozen_at < act_at, "{}", visible(&text));
+        assert!(!text[..frozen_at].contains("launching"));
     }
 
     #[test]
@@ -666,10 +791,9 @@ mod tests {
     fn a_site_whose_analysis_died_gets_a_red_line() {
         let text = run_ui(&["example.com"], false, false, vec![UiEvent::Gone { site: 0 }]);
         assert!(visible(&text).contains("x analysis failed"));
-        assert!(
-            text.contains("\x1b[31m") || !text.contains("analysis failed\x1b"),
-            "{text:?}"
-        );
+        // The plain-ascii theme paints red with the basic SGR, right before the text.
+        let red = text.find("\x1b[31m").expect("a red sequence");
+        assert!(red < text.find("x analysis failed").unwrap(), "{text:?}");
         assert!(text.ends_with(TAIL));
     }
 
