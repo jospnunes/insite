@@ -1,0 +1,99 @@
+# Updates the Scoop bucket (jospnunes/scoop-bucket) with the released Windows
+# archive. Called by the dist "host" step (see dist-workspace.toml); it runs
+# after the release exists. Needs the SCOOP_BUCKET_TOKEN secret: a token with
+# write access to the bucket repository. Only our own shell steps touch the
+# token; no third-party action receives it, and the clone and push use git
+# over HTTPS directly.
+name: Publish to Scoop
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist plan (JSON) of the release being published
+        required: true
+        type: string
+    secrets:
+      SCOOP_BUCKET_TOKEN:
+        description: token with write access to jospnunes/scoop-bucket
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  scoop:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 10
+    concurrency:
+      group: publish-scoop
+      cancel-in-progress: false
+    steps:
+      - name: Check the bucket token is set
+        env:
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          if [ -z "$SCOOP_BUCKET_TOKEN" ]; then
+            echo "::error::SCOOP_BUCKET_TOKEN is not set"
+            exit 1
+          fi
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Read the tag and version from the plan
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          set -euo pipefail
+          tag=$(printf '%s' "$PLAN" | jq -r '.announcement_tag')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::announcement_tag is missing from the dist plan"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - name: Render the manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dl="$RUNNER_TEMP/dl"
+          mkdir -p "$dl"
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir "$dl" \
+            --pattern 'insite-x86_64-pc-windows-msvc.zip.sha256'
+          # The file reads "<hash> *<archive name>"; only the hash is needed.
+          sha=$(awk '{print $1}' "$dl/insite-x86_64-pc-windows-msvc.zip.sha256")
+          if ! [[ "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "::error::the Windows zip checksum is missing or not a sha256 digest"
+            exit 1
+          fi
+          pkg/scoop/render.sh "$VERSION" "$sha" "$RUNNER_TEMP/insite.json"
+          cat "$RUNNER_TEMP/insite.json"
+
+      - name: Push to the Scoop bucket
+        env:
+          SCOOP_BUCKET_TOKEN: ${{ secrets.SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Basic auth header for git over HTTPS; masked so it never prints.
+          auth=$(printf 'x-access-token:%s' "$SCOOP_BUCKET_TOKEN" | base64 -w0)
+          echo "::add-mask::$auth"
+          export GIT_CONFIG_COUNT=1
+          export GIT_CONFIG_KEY_0="http.https://github.com/.extraheader"
+          export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
+          repo="$RUNNER_TEMP/scoop-bucket"
+          git clone https://github.com/jospnunes/scoop-bucket.git "$repo"
+          cd "$repo"
+          mkdir -p bucket
+          cp "$RUNNER_TEMP/insite.json" bucket/insite.json
+          git add bucket/insite.json
+          if git diff --cached --quiet; then
+            echo "The bucket already has insite $VERSION; nothing to push."
+            exit 0
+          fi
+          git -c user.name='José Pedro Pereira' -c user.email='contato@synthsolutions.com.br' \
+            commit -m "insite: Update to $VERSION"
+          git push origin HEAD
