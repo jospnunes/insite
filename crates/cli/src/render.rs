@@ -494,7 +494,7 @@ fn headline(out: &mut String, s: &Style, host: &str, net: &Network, report: &Rep
 }
 
 /// `CLOUDFLARENET, US` reads as `CLOUDFLARENET`.
-fn short_as_name(name: &str) -> String {
+pub(crate) fn short_as_name(name: &str) -> String {
     match name.rsplit_once(", ") {
         Some((head, cc)) if cc.len() == 2 && cc.chars().all(|c| c.is_ascii_uppercase()) => head.to_owned(),
         _ => name.to_owned(),
@@ -570,6 +570,13 @@ fn dns_line(d: &DomainReport, s: &Style) -> String {
 }
 
 // ---- -v: every section in full ---------------------------------------------
+
+/// The `-v` sections as text, for the live view's final frame. Neutralized like `terminal`.
+pub(crate) fn details_text(report: &Report, color: bool, width: usize) -> String {
+    let mut out = String::new();
+    details(&mut out, report, &Style::new(color), width);
+    neutralize(&out, color)
+}
 
 fn details(out: &mut String, report: &Report, s: &Style, width: usize) {
     let m = &report.modules;
@@ -920,7 +927,7 @@ pub fn clip(text: &str, max: usize) -> String {
 }
 
 /// Wraps `text` to `width`, every line indented by `by` spaces.
-fn indent(text: &str, by: usize, width: usize) -> String {
+pub(crate) fn indent(text: &str, by: usize, width: usize) -> String {
     let room = width.saturating_sub(by).max(30);
     let mut lines = Vec::new();
     for paragraph in text.lines() {
@@ -1078,6 +1085,166 @@ pub(crate) mod tests {
             }),
             findings: Vec::new(),
         };
+        report
+    }
+
+    /// A finding for tests, with the fields that do not matter filled in.
+    pub(crate) fn finding(id: &'static str, severity: Severity, title: &str) -> Finding {
+        Finding {
+            id,
+            severity,
+            params: BTreeMap::new(),
+            evidence: format!("evidence of {id}"),
+            title: title.to_owned(),
+            detail: format!("detail of {id}"),
+            fix: format!("fix for {id}"),
+        }
+    }
+
+    /// A complete report of a site behind one redirect, with every module filled in.
+    pub(crate) fn full_report() -> Report {
+        use crate::stackview::tests::tech;
+        use insite_core::analyze::dns::Dns;
+        use insite_core::analyze::infra::Infra;
+        use insite_core::analyze::network::{Network, Phases, Redirect};
+        use insite_core::analyze::security::Security;
+        use insite_core::analyze::seo::Seo;
+        use insite_core::analyze::tls::{Certificate, Tls};
+
+        fn ok<T>(data: T) -> Module<T> {
+            Module {
+                status: Status::Ok,
+                reason: None,
+                data: Some(data),
+                findings: Vec::new(),
+            }
+        }
+        let mut report = report_with(vec![
+            tech("Astro", 9, TechOrigin::Page),
+            tech("Cloudflare", 8, TechOrigin::Page),
+            tech("Microsoft 365", 2, TechOrigin::Dns),
+        ]);
+        report.target = TargetInfo {
+            input: "https://example.com/".to_owned(),
+            display_host: "example.com".to_owned(),
+            final_url: Some("https://www.example.com/".to_owned()),
+        };
+        report.outcome = Outcome::Complete;
+        report.modules.network = ok(Network {
+            final_url: Some("https://www.example.com/".to_owned()),
+            status: Some(200),
+            protocol: Some("HTTP/2"),
+            total_ms: Some(328.0),
+            redirects: vec![Redirect {
+                url: "https://example.com/".to_owned(),
+                status: 301,
+                location: "https://www.example.com/".to_owned(),
+                ms: 77.0,
+            }],
+            redirects_ms: 77.0,
+            phases: Some(Phases {
+                connection_reused: false,
+                dns_ms: Some(7.0),
+                tcp_ms: Some(13.0),
+                tls_ms: Some(14.0),
+                ttfb_ms: 199.0,
+                download_ms: 13.0,
+            }),
+            peer: Some("2606:4700::6810:7c60".to_owned()),
+            proxy: None,
+            ipv6: Some(true),
+            dns_source: None,
+            https: HttpsEnforcement::Redirects,
+            retries: 0,
+            page: None,
+        });
+        report.modules.tls = ok(Tls {
+            host: "www.example.com".to_owned(),
+            version: "TLSv1.3".to_owned(),
+            cipher_suite: "TLS_AES_128_GCM_SHA256".to_owned(),
+            key_exchange: None,
+            alpn: None,
+            trusted: true,
+            verification_error: None,
+            certificate: Some(Certificate {
+                subject: "CN=example.com".to_owned(),
+                issuer: "CN=WE1".to_owned(),
+                issuer_organization: Some("Google Trust Services".to_owned()),
+                not_before: "2026-08-01".to_owned(),
+                not_after: "2026-11-01".to_owned(),
+                days_remaining: 85,
+                lifetime_days: 90,
+                names: vec!["example.com".to_owned()],
+                covers_host: true,
+                key: "ECDSA P-256".to_owned(),
+                signature_algorithm: "ecdsa-with-SHA256".to_owned(),
+                sct_count: 2,
+            }),
+            chain: Vec::new(),
+            ocsp_stapled: false,
+        });
+        let mut dns = domain_report(&["10 mx.example.net."], Some("Microsoft 365"));
+        dns.dnssec = true;
+        dns.caa = vec!["0 issue \"letsencrypt.org\"".to_owned()];
+        dns.dns_provider = Some("Cloudflare".to_owned());
+        dns.ns = vec!["ns1.example.net.".to_owned()];
+        report.modules.dns = ok(Dns { domains: vec![dns] });
+        report.modules.infra = ok(Infra {
+            ip: Some("2606:4700::6810:7c60".to_owned()),
+            asn: Some(13335),
+            as_name: Some("CLOUDFLARENET, US".to_owned()),
+            prefix: None,
+            country: None,
+            hosting: None,
+            cdn: Vec::new(),
+            challenge: None,
+            server: None,
+        });
+        report.modules.security = ok(Security {
+            grade: Some("B"),
+            score: Some(75),
+            methodology: "test",
+            tests: Vec::new(),
+            security_txt: None,
+            mixed_content: Vec::new(),
+        });
+        report.modules.security.findings = vec![
+            finding(
+                "sec.csp.unsafe_inline",
+                Severity::Medium,
+                "Content Security Policy allows inline scripts",
+            ),
+            finding(
+                "sec.cookies.insecure_hsts",
+                Severity::Low,
+                "Cookies without the Secure flag",
+            ),
+        ];
+        report.modules.seo = ok(Seo {
+            title: Some("Example".to_owned()),
+            title_length: 7,
+            description: None,
+            description_length: 0,
+            canonical: Vec::new(),
+            canonical_header: None,
+            meta_robots: None,
+            x_robots_tag: Vec::new(),
+            indexable: true,
+            lang: Some("en".to_owned()),
+            viewport: true,
+            h1_count: 1,
+            headings: [1, 0, 0, 0, 0, 0],
+            open_graph: Vec::new(),
+            twitter_card: None,
+            structured_data: Vec::new(),
+            hreflang: Vec::new(),
+            images: 0,
+            images_without_alt: 0,
+            robots_txt: None,
+            sitemap: None,
+        });
+        report.modules.weight = weight_report(None).modules.weight;
+        report.modules.weight.findings = vec![finding("weight.html_large", Severity::Low, "Large HTML document")];
         report
     }
 
