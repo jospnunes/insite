@@ -1,0 +1,85 @@
+# Publishes the three crates (insite-sigc, insite-core, insite) to crates.io
+# with Trusted Publishing: no long-lived token. Called by the dist "host" step
+# (see dist-workspace.toml); it runs after the release exists, and skips
+# prereleases like the other publish jobs.
+#
+# One-time setup on crates.io, for each of the three crates (Settings, Trusted
+# Publishing): repository jospnunes/insite, workflow file release.yml. The file
+# is release.yml, not this one, because crates.io matches the top-level workflow
+# (the OIDC claim workflow_ref), and this workflow is called from release.yml.
+#
+# Crates already on crates.io at this version are skipped, so a re-run is safe.
+name: Publish to crates.io
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        description: dist plan (JSON) of the release being published
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  crates:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    concurrency:
+      group: publish-crates
+      cancel-in-progress: false
+    steps:
+      - name: Read the tag and version from the plan
+        env:
+          PLAN: ${{ inputs.plan }}
+        run: |
+          set -euo pipefail
+          tag=$(printf '%s' "$PLAN" | jq -r '.announcement_tag')
+          if [ -z "$tag" ] || [ "$tag" = "null" ]; then
+            echo "::error::announcement_tag is missing from the dist plan"
+            exit 1
+          fi
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+          echo "VERSION=${tag#v}" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          ref: ${{ env.TAG }}
+          persist-credentials: false
+
+      - name: Install the Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      # Needs id-token: write. The token is revoked by the action's post step.
+      - name: Get a crates.io token (Trusted Publishing)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5
+
+      # Order matters: insite depends on insite-core, which depends on insite-sigc.
+      - name: Publish the crates
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: |
+          set -euo pipefail
+          for crate in insite-sigc insite-core insite; do
+            status=0
+            pkg/crates-published.sh "$crate" "$VERSION" || status=$?
+            case "$status" in
+              0)
+                echo "$crate $VERSION: already published"
+                continue
+                ;;
+              1) ;;
+              *)
+                echo "::error::could not tell whether $crate $VERSION is on crates.io"
+                exit 1
+                ;;
+            esac
+            # cargo publish waits until the crate shows up in the index, so the
+            # next crate can resolve it.
+            cargo publish -p "$crate"
+          done

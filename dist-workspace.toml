@@ -8,9 +8,17 @@ cargo-dist-version = "0.33.1"
 # CI backends to support
 ci = "github"
 # The installers to generate for each app
-installers = ["shell", "powershell"]
+installers = ["shell", "powershell", "homebrew"]
 # Target platforms to build apps for (Rust target-triple syntax)
 targets = ["aarch64-apple-darwin", "aarch64-unknown-linux-gnu", "aarch64-unknown-linux-musl", "x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-unknown-linux-musl", "x86_64-pc-windows-msvc"]
+# Homebrew formula goes to this tap (the HOMEBREW_TAP_TOKEN secret needs write access to it)
+tap = "jospnunes/homebrew-tap"
+# Jobs that run after the release exists, in addition to the dist host step
+publish-jobs = ["homebrew", "./publish-crates", "./publish-packages", "./publish-aur", "./publish-scoop"]
+# Least privilege for the custom jobs (dist defaults them to id-token and packages write).
+# Each reusable workflow can only narrow what its caller grants, so the caller job must grant
+# at least what the workflow asks for.
+github-custom-job-permissions = { "publish-crates" = { contents = "read", id-token = "write" }, "publish-packages" = { contents = "write" }, "publish-aur" = { contents = "read" }, "publish-scoop" = { contents = "read" } }
 # Path that installers should place binaries in
 install-path = "CARGO_HOME"
 # Where to host releases
