@@ -40,7 +40,7 @@ internal one.
 | `--desktop` | Emulate a desktop instead of a phone in the browser. |
 | `--browser-timeout <seconds>` | Deadline for the browser, counted from the start. Default 20, or 60 with `--throttle`. |
 | `-j`, `--json` | Print the report as JSON (an array with several sites). Cannot be combined with `--ndjson` or `--md`. |
-| `--ndjson` | Print one JSON report per line, as each site finishes. |
+| `--ndjson` | Print one JSON report per line, as each site finishes. Cannot be combined with `--json` or `--md`. |
 | `--md` | Print the report as Markdown, ready to paste into an e-mail or a proposal. |
 | `-t`, `--timeout <seconds>` | Deadline for each site. Default 5. |
 | `-v`, `--verbose` | Show every section in full, with the evidence. |
@@ -81,7 +81,9 @@ $ insite explain
 ### `insite update`
 
 Downloads the newest webappanalyzer signatures into the cache directory
-(`~/.cache/insite/signatures` on Linux; `$XDG_CACHE_HOME` is honoured). Until
+(`~/.cache/insite/signatures` on Linux, where `$XDG_CACHE_HOME` is honoured;
+`~/Library/Caches/insite/signatures` on macOS; `%LOCALAPPDATA%\insite\cache\signatures`
+on Windows). Until
 then insite uses the embedded set, and it switches to a downloaded set only when
 that set is newer.
 

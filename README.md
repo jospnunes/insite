@@ -34,14 +34,14 @@ yay -S insite-bin
 Debian, Ubuntu, Fedora and relatives: download the package from the [releases page](https://github.com/jospnunes/insite/releases/latest), for x86_64 or aarch64.
 
 ```bash
-sudo apt install ./insite_0.1.0_amd64.deb
-sudo dnf install ./insite-0.1.0-1.x86_64.rpm
+sudo apt install ./insite_*_amd64.deb
+sudo dnf install ./insite-*.x86_64.rpm
 ```
 
 Rust 1.89 or newer:
 
 ```bash
-cargo install insite
+cargo install --locked insite
 ```
 
 Windows, with Scoop:
@@ -65,7 +65,7 @@ The binaries run on Linux (x86_64 and aarch64, glibc and musl), macOS (Intel and
 insite wordpress.org                                # one site, the full report
 insite --browser wordpress.org                      # adds LCP, CLS and TBT from a real page load
 insite wordpress.org example.com mozilla.org        # several sites, one report each
-insite --json wordpress.org | jq -r '.modules.security.data.grade'
+insite --json wordpress.org | jq -r '.modules.security.data.grade'   # just the security grade
 insite --save wp.json.gz wordpress.org              # keep the raw snapshot
 insite --from wp.json.gz                            # analyze it again, with no network
 insite explain sec.hsts.short                       # what a finding means and how to fix it
@@ -121,7 +121,7 @@ Raise `max-age` to at least 15552000 (180 days); a year (31536000) is common.
 
 A whole run takes about a second: the median is 888 ms over a 100-site reference list, one site at a time from a VPS in Boston on 30 Oct 2026 ([method](https://github.com/jospnunes/insite/blob/main/docs/methodology.md#timing)).
 
-Every finding carries its evidence, and what insite could not measure shows as "not measured", never as absent. On 20 hand-labeled sites the stack detection has a precision of 0.995 (uncertain detections excluded), and it agrees with the Wappalyzer JavaScript core at F1 0.997 on 90 sites. On 26 sites the security grade and score matched the Observatory's published scans wherever both saw the same page.
+Every finding carries its evidence, and what insite could not measure shows as "not measured", never as absent. On 20 hand-labeled sites the stack detection has a precision of 0.995 (uncertain detections excluded), and it agrees with the Wappalyzer JavaScript core at F1 0.997 on 90 sites. On 26 sites the security grade and score matched the Observatory's published scans wherever both saw the same page ([comparison](https://github.com/jospnunes/insite/blob/main/docs/methodology.md#security-grade-and-the-observatory)).
 
 It is passive. It reads what any visitor would see, with no port scans, path fuzzing or vulnerability probes.
 
@@ -136,14 +136,14 @@ Each cell comes from the tool's own README or docs. A dash means they do not men
 | insite | yes | yes | A+ to F grade | yes | yes | with `--browser` |
 | [httpx](https://github.com/projectdiscovery/httpx) | Wappalyzer dataset (`-tech-detect`) | data grab (`-tls-grab`) | CSP header probe | CNAME and IP | - | - |
 | [WhatWeb](https://github.com/urbanadventurer/WhatWeb) | 1800+ plugins | - | - | - | - | - |
-| [testssl.sh](https://github.com/testssl/testssl.sh) | - | protocols, ciphers, named flaws, certificate | HSTS and others (`--header`) | CAA | - | - |
+| [testssl.sh](https://github.com/testssl/testssl.sh) | - | protocols, ciphers, named flaws, certificate | HSTS and others (`--header`) | CAA; MX over STARTTLS (`--mx`) | - | - |
 | [Lighthouse](https://github.com/GoogleChrome/lighthouse) | - | HTTPS use only | HSTS, clickjacking, CSP | - | yes | LCP, CLS, TBT |
 
 testssl.sh tests named flaws such as Heartbleed and ROBOT, which insite does not, and Lighthouse also audits accessibility. insite reports on all these areas in one passive pass. It does not replace their depth.
 
 ## For AI agents and scripts
 
-`--json` and `--ndjson` print the report as data, one object per site, and `--md` writes Markdown you can paste into a model's context. Finding `id` and `params` are stable, titles and texts may change, and `schema_version` follows semver. Exit codes: 0 complete, 1 unreachable, 2 usage error, 3 partial, 130 interrupted.
+`--json` and `--ndjson` print the report as data, one report per site (two with `--ndjson --browser`: `fast`, then `full`), and `--md` writes Markdown you can paste into a model's context. Finding `id` and `params` are stable, titles and texts may change, and `schema_version` follows semver. Exit codes: 0 complete, 1 unreachable, 2 usage error, 3 partial, 130 interrupted.
 
 ```
 insite --json -m security wordpress.org | jq -c '.modules.security.findings[] | {id, severity, params}'
@@ -155,7 +155,7 @@ insite --json -m security wordpress.org | jq -c '.modules.security.findings[] | 
 {"id":"sec.sri.missing","severity":"low","params":{"value":"https://stats.wp.com/e-202644.js"}}
 ```
 
-Two more findings are trimmed. insite is passive, so it does not scan or probe the target. If an agent picks the targets, keep the warning above in mind.
+Two more findings are trimmed. If an agent picks the targets, the warning above applies.
 
 ## Docs and license
 
