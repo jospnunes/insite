@@ -13,6 +13,7 @@ First release. insite is a command-line tool that gives a full X-ray of a websit
 - Output: terminal, `--json`, `--ndjson`, `--md`.
 - Live terminal output: on an interactive terminal the analysis is drawn as it happens (request phases as bars, modules settling one by one, the browser step and the batch table), and the final screen stays in the scrollback. It turns itself off for pipes and files, `--json`, `--ndjson`, `--md`, `NO_COLOR` and `TERM=dumb`, where the output is the same plain text as before.
 - Batch mode: several sites as arguments or on standard input.
+- The port 80 redirect route (the HTTP-to-HTTPS check) is now followed in parallel with the page, so it no longer waits for the main request.
 - `--save` and `--from` store and re-analyze snapshots without network.
 - `insite explain <id>` describes a finding and how to fix it; `insite update` fetches the newest signatures; your own signatures can be added.
 
