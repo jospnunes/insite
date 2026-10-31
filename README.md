@@ -1,57 +1,107 @@
 # insite
 
+X-ray any website from your terminal: network, TLS, DNS, e-mail, security grade, technology stack, SEO and page weight, in about a second.
+
+[Português](https://github.com/jospnunes/insite/blob/main/README.pt-BR.md)
+
 [![CI](https://github.com/jospnunes/insite/actions/workflows/ci.yml/badge.svg)](https://github.com/jospnunes/insite/actions/workflows/ci.yml)
-[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
-[![Latest release](https://img.shields.io/github/v/release/jospnunes/insite)](https://github.com/jospnunes/insite/releases/latest)
+[![Release](https://img.shields.io/github/v/release/jospnunes/insite)](https://github.com/jospnunes/insite/releases/latest)
+[![crates.io](https://img.shields.io/crates/v/insite)](https://crates.io/crates/insite)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](https://github.com/jospnunes/insite/blob/main/LICENSE)
 
-Full X-ray of a website from the terminal: network, TLS, DNS and e-mail,
-infrastructure, technology stack, security grade, technical SEO and page weight,
-in about a second, from a single binary. With `--browser`, also Core Web Vitals
-and the stack only JavaScript reveals.
+![Terminal recording of insite analyzing a website: the request phases fill in as bars, then each module settles on a verdict and the findings are listed](https://raw.githubusercontent.com/jospnunes/insite/main/assets/demo.gif)
 
-"About a second" is measured: `scripts/measure-time.py` gives a median of
-888 ms for the whole run over the 100-site reference list (`bench/sites.tsv`),
-one site at a time from a VPS in Boston, on 30 Oct 2026.
+## Install
 
-Other tools cover one slice each: WhatWeb and Wappalyzer for the stack, SSL
-Labs for TLS, the MDN HTTP Observatory for headers, Lighthouse for Web Vitals.
-insite reports on all of these areas in one passive pass from the terminal
-(Web Vitals only with `--browser`). It is not a replacement for their depth.
+Linux and macOS (on Linux with a glibc older than 2.35 the installer picks the static musl build):
 
-```
-$ insite wordpress.org
-wordpress.org → https://wordpress.org/  200  HTTP/2  381 ms
-  tcp 5.3 · tls 75 · ttfb 37 · download 12
-  HTTPS enforced
-
-stack     WordPress 7.2 · WordPress Block Editor · WordPress Site Editor · Gutenberg 24.3.0 · MySQL
-          PHP · Nginx · Google Font API · Google Tag Manager
-security  C   score 55 · 4 issues
-tls       Let's Encrypt · TLS 1.3 · expires in 54 days
-seo       indexable
-weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party in the HTML
-
-  medium  No Content Security Policy  sec.csp.missing
-  low     HSTS max-age is shorter than six months  sec.hsts.short
-  low     Scripts from other domains without Subresource Integrity  sec.sri.missing
-  low     No X-Content-Type-Options  sec.xcto.missing
+```bash
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jospnunes/insite/releases/latest/download/insite-installer.sh | sh
 ```
 
-(Output trimmed; `-v` opens every section with its evidence.)
+Homebrew (macOS and Linux):
 
-## Principles
+```bash
+brew install jospnunes/tap/insite
+```
 
-- **Fast enough to be a selling point.** Everything that does not depend on
-  something else starts at t = 0; the report never waits past its deadline
-  (the timing method is above).
-- **Correct before fast.** No finding without evidence. What could not be
-  measured is reported as not measured, never as absent: a DNS resolver that
-  filters records, a bot challenge instead of the page, an error page — each is
-  said plainly, and nothing is concluded from it.
-- **Passive.** It reads what any visitor would see. No port scans, no path
-  fuzzing, no vulnerability probes.
+Arch Linux (AUR):
 
-## What it reports
+```bash
+yay -S insite-bin
+```
+
+Debian, Ubuntu, Fedora and relatives: download the package from the [releases page](https://github.com/jospnunes/insite/releases/latest), for x86_64 or aarch64.
+
+```bash
+sudo apt install ./insite_0.1.0_amd64.deb
+sudo dnf install ./insite-0.1.0-1.x86_64.rpm
+```
+
+Rust 1.89 or newer:
+
+```bash
+cargo install insite
+```
+
+Windows, with Scoop:
+
+```powershell
+scoop bucket add insite https://github.com/jospnunes/scoop-bucket
+scoop install insite
+```
+
+Windows, with PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/jospnunes/insite/releases/latest/download/insite-installer.ps1 | iex"
+```
+
+The binaries run on Linux (x86_64 and aarch64, glibc and musl), macOS (Intel and Apple silicon) and Windows x86_64. `--browser` needs an installed Chrome, Chromium, Edge or Brave, and does not run on Windows yet.
+
+## Try it
+
+```
+insite wordpress.org                                # one site, the full report
+insite --browser wordpress.org                      # adds LCP, CLS and TBT from a real page load
+insite wordpress.org example.com mozilla.org        # several sites, one report each
+insite --json wordpress.org | jq -r '.modules.security.data.grade'
+insite --save wp.json.gz wordpress.org              # keep the raw snapshot
+insite --from wp.json.gz                            # analyze it again, with no network
+insite explain sec.hsts.short                       # what a finding means and how to fix it
+```
+
+The `--browser` run adds one line to the report:
+
+```
+browser   LCP 1.1 s · CLS 0.00 · TBT 18 ms · 50 requests, 1.6 MB · 70% third-party · mobile, unthrottled
+```
+
+And `explain` prints:
+
+```
+HSTS max-age is shorter than six months  sec.hsts.short · low
+
+The HSTS policy (<value>) lasts less than six months, so browsers that have not visited recently fall back to plain HTTP on the first request.
+
+Fix
+Raise `max-age` to at least 15552000 (180 days); a year (31536000) is common.
+```
+
+## What it checks
+
+- **network**: redirects, DNS, TCP, TLS, TTFB and download time per phase, HTTP version, IPv6.
+- **tls**: certificate, chain, expiry, names, protocol.
+- **dns**: records, DNSSEC, SPF, DMARC, DKIM, MTA-STS, CAA.
+- **infra**: AS, hosting, CDN, bot challenges.
+- **security**: A+ to F grade, scored like the [MDN HTTP Observatory](https://github.com/mdn/mdn-http-observatory).
+- **stack**: 7,647 technologies from the [webappanalyzer](https://github.com/enthec/webappanalyzer) signatures, and known vulnerable JavaScript libraries.
+- **seo**: indexability, title, description, canonical, headings, Open Graph, robots.txt, sitemap.
+- **weight**: HTML size, scripts, render-blocking resources, images, third parties.
+- **browser** (`--browser`): LCP, CLS, TBT and FCP, requests and bytes by type, console errors.
+
+<details>
+<summary>Every check, module by module</summary>
 
 | Module | What |
 | --- | --- |
@@ -60,152 +110,64 @@ weight    HTML 37 KB (178 KB uncompressed) · 5 scripts · 1 third party in the 
 | dns | A/AAAA/CNAME/NS/MX/CAA, DNSSEC, SPF (includes walked, 10-lookup limit), DMARC, DKIM selectors, MTA-STS, TLS-RPT, BIMI |
 | infra | AS and owner, hosting, CDN, server, bot challenges |
 | security | A+ to F grade with the [MDN HTTP Observatory](https://github.com/mdn/mdn-http-observatory) scoring, plus mixed content, insecure forms, version leaks, downgrades, security.txt |
-| stack | ~7,600 technologies from the [webappanalyzer](https://github.com/enthec/webappanalyzer) signatures, each with the evidence behind it and where it was seen (page, DNS or certificate); the terminal shows the page ones as `stack` and the DNS ones as `services`; libraries with a known vulnerable version are flagged using [Retire.js](https://github.com/RetireJS/retire.js) data |
+| stack | 7,647 technologies from the [webappanalyzer](https://github.com/enthec/webappanalyzer) signatures, each with the evidence behind it and where it was seen (page, DNS or certificate); libraries with a known vulnerable version are flagged using [Retire.js](https://github.com/RetireJS/retire.js) data |
 | seo | indexability, title, description, canonical, headings, language, Open Graph, structured data, robots.txt, sitemap |
 | weight | HTML size and compression, scripts, render-blocking resources, images, third parties by name |
 | browser | with `--browser`: LCP, CLS, TBT and FCP rated, requests and bytes by type, heaviest resources, third-party share, console errors |
 
-The security grade reproduces the Observatory's tests and numbers; on 26 sites
-compared with its published scans, grade and score matched wherever both saw
-the same page. The one known gap: the CORS test's −50 case needs a
-cross-origin request, which insite does not send.
+</details>
 
-## Install
+## Why insite
 
-Linux and macOS (on Linux with a glibc older than 2.35, the installer picks
-the static musl build):
+A whole run takes about a second: the median is 888 ms over a 100-site reference list, one site at a time from a VPS in Boston on 30 Oct 2026 ([method](https://github.com/jospnunes/insite/blob/main/docs/methodology.md#timing)).
 
-```bash
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/jospnunes/insite/releases/latest/download/insite-installer.sh | sh
-```
+Every finding carries its evidence, and what insite could not measure shows as "not measured", never as absent. On 20 hand-labeled sites the stack detection has a precision of 0.995 (uncertain detections excluded), and it agrees with the Wappalyzer JavaScript core at F1 0.997 on 90 sites. On 26 sites the security grade and score matched the Observatory's published scans wherever both saw the same page.
 
-Windows (PowerShell):
+It is passive. It reads what any visitor would see, with no port scans, path fuzzing or vulnerability probes.
 
-```powershell
-powershell -ExecutionPolicy Bypass -c "irm https://github.com/jospnunes/insite/releases/latest/download/insite-installer.ps1 | iex"
-```
+> **Do not point insite at untrusted targets from a sensitive network.** It follows redirects, and the `Sitemap:` URL in `robots.txt`, to whatever address they point to, private addresses included. A hostile site can make it request an internal one.
 
-The archives for each platform are on the
-[releases page](https://github.com/jospnunes/insite/releases). From source,
-with Rust 1.89 or newer:
+## Compared with other tools
 
-```bash
-cargo install --path crates/cli
-```
+Each cell comes from the tool's own README or docs. A dash means they do not mention it.
 
-**Platforms:** Linux x86_64 and aarch64 (glibc and musl), macOS (Intel and
-Apple silicon) and Windows x86_64. The minimum supported Rust version (MSRV) is
-1.89. `--browser` needs Chrome, Chromium, Edge or Brave and does not run on
-Windows yet.
+| | Stack | TLS | Security headers | DNS and e-mail | SEO | Web Vitals |
+| --- | --- | --- | --- | --- | --- | --- |
+| insite | yes | yes | A+ to F grade | yes | yes | with `--browser` |
+| [httpx](https://github.com/projectdiscovery/httpx) | Wappalyzer dataset (`-tech-detect`) | data grab (`-tls-grab`) | CSP header probe | CNAME and IP | - | - |
+| [WhatWeb](https://github.com/urbanadventurer/WhatWeb) | 1800+ plugins | - | - | - | - | - |
+| [testssl.sh](https://github.com/testssl/testssl.sh) | - | protocols, ciphers, named flaws, certificate | HSTS and others (`--header`) | CAA | - | - |
+| [Lighthouse](https://github.com/GoogleChrome/lighthouse) | - | HTTPS use only | HSTS, clickjacking, CSP | - | yes | LCP, CLS, TBT |
 
-## Usage
+testssl.sh tests named flaws such as Heartbleed and ROBOT, which insite does not, and Lighthouse also audits accessibility. insite reports on all these areas in one passive pass. It does not replace their depth.
+
+## For AI agents and scripts
+
+`--json` and `--ndjson` print the report as data, one object per site, and `--md` writes Markdown you can paste into a model's context. Finding `id` and `params` are stable, titles and texts may change, and `schema_version` follows semver. Exit codes: 0 complete, 1 unreachable, 2 usage error, 3 partial, 130 interrupted.
 
 ```
-insite [options] <url>...
-  -m, --modules <list>       network,tls,dns,infra,security,stack,seo,weight,browser
-  -b, --browser              also load the page in a headless Chrome
-      --throttle             Core Web Vitals comparable to Lighthouse mobile (implies --browser)
-      --desktop              emulate a desktop instead of a phone in the browser
-  -j, --json | --ndjson | --md
-  -t, --timeout <s>          deadline per site (default 5)
-      --browser-timeout <s>  deadline for the browser (default 20, 60 with --throttle)
-  -v, --verbose              every section in full, with evidence
-      --save <file>          save the raw snapshot (gzip with .gz)
-      --from <file>          analyze saved snapshots without network
-      --ua <profile>         honest (default), hybrid, chrome, or any text
-      --lang <tag>           Accept-Language (default: from the system locale)
-      --native-roots         trust the system's certificate store
-  -c, --concurrency <n>      sites in parallel in batch mode (default 8)
-
-insite explain <id>          a finding, why it matters and how to fix it
-insite update                newest webappanalyzer signatures into the cache
-      --force                download and compile even when they are up to date
-      --native-roots         trust the system's certificate store for the download
+insite --json -m security wordpress.org | jq -c '.modules.security.findings[] | {id, severity, params}'
 ```
 
-**Do not point it at untrusted targets from a sensitive network.** insite
-follows redirects, and the `Sitemap:` URL in `robots.txt`, to whatever address
-they point to, private addresses included. A hostile site can make it request
-an internal one.
-
-Several sites at once: `insite a.com b.com`, or a list on standard input
-(`insite < sites.txt`). Analyses of the same registrable domain run one after
-another, with a pause between them. `--ndjson` prints one report per line as
-sites finish (with `--browser`, two per site: the `fast` report, then the `full` one,
-told apart by the `phase` field); `--md` writes a report ready to paste into an e-mail.
-
-**Exit codes:** 0 complete; 1 unreachable; 2 usage error; 3 partial in a way
-that changes the reading (a module timed out or failed, or the page does not
-represent the site); 130 interrupted. In batch mode the most serious wins.
-Ctrl-C prints what has arrived; a second Ctrl-C quits at once.
-
-**Browser mode** needs Chrome, Chromium, Edge or Brave (found on the usual
-paths, or set `CHROME_PATH`). It runs on Linux and macOS; Windows support is
-planned. Metrics are lab measurements and always carry their profile: an LCP
-measured without throttling is not the PageSpeed one.
-
-**Live output.** On an interactive terminal, with the default text format, insite
-draws the analysis as it happens: each request phase fills in as a bar the
-moment it finishes, redirects appear as they are followed, and every module
-spins until its data arrives and then settles on its verdict (✓, ▲ or ✗) with
-its summary. With `--browser`, the browser step gets its own second part; with
-several sites, a table fills in row by row. When it ends, the final screen stays
-in the scrollback, so you can scroll and copy it. Colours are 24-bit when
-`COLORTERM` says `truecolor` or `24bit`, and the 16-colour palette otherwise;
-without UTF-8 in the locale, the symbols fall back to ASCII; below 60 columns
-the bars go away and the lines become compact. The animation only draws what the
-analysis already produced and never delays it. `--from` on an interactive
-terminal shows the same final screen, without animation.
-
 ```
-◆ insite 0.1.0                                                                                  g1.globo.com
-
-  ┌ dns      ███████████▊                                                                        15 ms
-  │ tcp                 ███████▎                                                                9.1 ms
-  │ tls                         ███████▊                                                        9.7 ms
-  │ ttfb                               █████████████████▎                                        21 ms
-  │ download                                             █████████████▎                          16 ms
-  └ 100 ms  200 · HTTP/2 · no IPv6 · 186.192.83.7 · AS28604 Globo Comunicacao e Participacoes SA
-    HTTPS enforced
-
-✓ tls       DigiCert Inc · TLS 1.3 · expires in 52 days
-✓ dns       ns04.globo.com · no DNSSEC · CAA
-✓ email     smtp.globo.com · SPF -all · DMARC p=none · DKIM default
-▲ security   F  ████████████ 0/100
-▲ stack     React · Google Tag Manager · jQuery 1.8.3 · reCAPTCHA
-· services  Microsoft 365 · Salesforce · Meta
-✓ seo       indexable · 1 issue
-✓ weight    HTML 152 KB (877 KB uncompressed) · 14 scripts · 1 third party in the HTML
-
-  8 things to look at
-  ▲ medium    Content Security Policy allows inline or arbitrary scripts  sec.csp.unsafe_inline
-  ▲ medium    No HSTS                                                     sec.hsts.missing
-  ▲ medium    Scripts from other domains loaded insecurely                sec.sri.insecure
-  …
-
-  insite explain sec.csp.unsafe_inline   ·   -v for evidence   ·   --json
+{"id":"sec.csp.missing","severity":"medium","params":{"value":""}}
+{"id":"sec.hsts.short","severity":"low","params":{"value":"max-age=3600"}}
+{"id":"sec.sri.missing","severity":"low","params":{"value":"https://stats.wp.com/e-202644.js"}}
 ```
 
-(Findings trimmed; this is the screen left behind when the run ends.)
+Two more findings are trimmed. insite is passive, so it does not scan or probe the target. If an agent picks the targets, keep the warning above in mind.
 
-It turns itself off, and the output becomes exactly the plain text shown at the
-top, when standard output is a pipe or a file, with `--json`, `--ndjson` or
-`--md`, when `NO_COLOR` is set to anything non-empty, or when `TERM` is `dumb`.
-On the Windows console, colours and width go through
-[crossterm](https://github.com/crossterm-rs/crossterm) and have not been checked
-by hand; `NO_COLOR` gives the plain text there.
+## Docs and license
 
-**Own signatures:** files in the webappanalyzer format in
-`~/.config/insite/fingerprints/*.json` (macOS: `~/Library/Application
-Support/insite`, Windows: `%APPDATA%\insite`) are added to the embedded ones and
-override technologies of the same name.
+- [Usage](https://github.com/jospnunes/insite/blob/main/docs/usage.md): every option, batch mode, browser mode, live output, your own signatures, JSON stability.
+- [Methodology](https://github.com/jospnunes/insite/blob/main/docs/methodology.md): principles, timing, precision, the Observatory comparison.
+- [Architecture](https://github.com/jospnunes/insite/blob/main/docs/arquitetura.md): the design document, in Portuguese.
+- [Changelog](https://github.com/jospnunes/insite/blob/main/CHANGELOG.md).
 
-**JSON:** consumers should key on finding `id` and `params`, which are stable;
-titles and texts may change. `schema_version` follows semver.
+insite is free software under the GPL-3.0-or-later. AS lookups use Team Cymru's public IP-to-ASN DNS service. insite is not affiliated with or endorsed by any project below.
 
-## Data and licenses
-
-insite is free software under the **GPL-3.0-or-later**. It embeds:
+<details>
+<summary>Embedded data and its licenses</summary>
 
 | Data | Source | License |
 | --- | --- | --- |
@@ -217,35 +179,6 @@ insite is free software under the **GPL-3.0-or-later**. It embeds:
 | Trust roots | Mozilla, via [webpki-roots](https://github.com/rustls/webpki-roots) | CDLA-Permissive-2.0 |
 | Public suffix list | [publicsuffix.org](https://publicsuffix.org/), via the `psl` crate | MPL-2.0 |
 
-AS lookups use Team Cymru's public IP-to-ASN DNS service. insite is not
-affiliated with, or endorsed by, any of these projects. `scripts/` regenerates
-the embedded data; the report lists the version of each source it used.
+`scripts/` regenerates the embedded data, and the report lists the version of each source it used.
 
-[docs/arquitetura.md](docs/arquitetura.md) is the design document, in
-Portuguese: decisions and trade-offs.
-
----
-
-## Em português
-
-Raio-x completo de um site pelo terminal: rede, TLS, DNS e e-mail,
-infraestrutura, stack, nota de segurança, SEO técnico e peso da página, em
-cerca de um segundo, num binário único. Com `--browser`, também Core Web Vitals
-e a stack que só o JavaScript revela.
-
-- **Rápido o bastante para ser argumento de venda**, e **correto antes de
-  rápido**: nada de achado sem evidência; o que não pôde ser medido aparece como
-  não medido, nunca como ausente.
-- **Passivo**: lê o que qualquer visitante veria. Sem varredura de portas, sem
-  testes de vulnerabilidade.
-- **Nota de segurança** com a metodologia do MDN HTTP Observatory, conferida
-  contra os resultados publicados por ele.
-
-Instalação: `cargo install --path crates/cli` (Rust 1.89 ou mais novo). Uso:
-`insite exemplo.com.br`; vários sites: `insite a.com b.com` ou uma lista pela
-entrada padrão. `insite explain <id>` explica cada achado e como corrigir.
-Formatos: terminal, `--json`, `--ndjson` e `--md` (relatório pronto para
-cliente).
-
-Licença GPL-3.0-or-later. As bases embutidas e suas licenças estão na tabela
-acima. O desenho completo está em [docs/arquitetura.md](docs/arquitetura.md).
+</details>

@@ -8,6 +8,59 @@ use crate::Cli;
 
 const USAGE: &str = include_str!("../../../docs/usage.md");
 const METHODOLOGY: &str = include_str!("../../../docs/methodology.md");
+const README: &str = include_str!("../../../README.md");
+const README_PT: &str = include_str!("../../../README.pt-BR.md");
+
+const DEMO_GIF: &str = "https://raw.githubusercontent.com/jospnunes/insite/main/assets/demo.gif";
+
+/// Words the copy rules ban from the READMEs (matched case-insensitively).
+const BANNED_WORDS: &[&str] = &[
+    "blazingly",
+    "powerful",
+    "seamless",
+    "robust",
+    "cutting-edge",
+    "comprehensive",
+    "effortless",
+];
+
+/// Every link and image target outside fenced code blocks: the part inside
+/// `](...)`, and the value of `src="..."` and `href="..."`.
+fn link_targets(markdown: &str) -> Vec<String> {
+    let mut targets = Vec::new();
+    let mut in_block = false;
+    for line in markdown.lines() {
+        if line.trim_start().starts_with("```") {
+            in_block = !in_block;
+            continue;
+        }
+        if in_block {
+            continue;
+        }
+        let mut rest = line;
+        while let Some(start) = rest.find("](") {
+            rest = &rest[start + 2..];
+            match rest.find(')') {
+                Some(end) => {
+                    targets.push(rest[..end].to_owned());
+                    rest = &rest[end + 1..];
+                }
+                None => break,
+            }
+        }
+        for attr in ["src=\"", "href=\""] {
+            let mut rest = line;
+            while let Some(start) = rest.find(attr) {
+                rest = &rest[start + attr.len()..];
+                if let Some(end) = rest.find('"') {
+                    targets.push(rest[..end].to_owned());
+                    rest = &rest[end..];
+                }
+            }
+        }
+    }
+    targets
+}
 
 /// Every `--long` name in `command` and its subcommands, without `--help`,
 /// `--version` and arguments hidden from `--help`.
@@ -112,6 +165,55 @@ mod tests {
     #[test]
     fn docs_methodology_commands_parse() {
         assert_commands_parse("docs/methodology.md", METHODOLOGY);
+    }
+
+    #[test]
+    fn readme_targets_are_absolute() {
+        for (name, readme) in [("README.md", README), ("README.pt-BR.md", README_PT)] {
+            for target in link_targets(readme) {
+                assert!(
+                    target.starts_with("https://") || target.starts_with('#'),
+                    "{name}: `{target}` is neither an https:// URL nor an in-page anchor"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn readme_commands_parse() {
+        assert_commands_parse("README.md", README);
+        assert_commands_parse("README.pt-BR.md", README_PT);
+    }
+
+    #[test]
+    fn readme_has_no_banned_words() {
+        for (name, readme) in [("README.md", README), ("README.pt-BR.md", README_PT)] {
+            let lower = readme.to_lowercase();
+            for word in BANNED_WORDS {
+                assert!(!lower.contains(word), "{name} uses the banned word `{word}`");
+            }
+        }
+    }
+
+    #[test]
+    fn readme_shows_the_demo() {
+        assert!(README.contains(DEMO_GIF), "README.md does not show the demo GIF");
+        assert!(
+            README_PT.contains(DEMO_GIF),
+            "README.pt-BR.md does not show the demo GIF"
+        );
+    }
+
+    #[test]
+    fn link_targets_reads_links_images_and_attributes() {
+        let md = "\
+[a](https://x.test/a) and ![b](docs/b.png) and <img src=\"c.gif\">
+
+```
+[not](a/link)
+```
+";
+        assert_eq!(link_targets(md), vec!["https://x.test/a", "docs/b.png", "c.gif"]);
     }
 
     #[test]
