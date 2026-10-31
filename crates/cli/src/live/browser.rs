@@ -119,12 +119,8 @@ pub(crate) fn final_lines(
     let mut parts = vec![safe(&data.product), safe(&data.profile)];
     parts.retain(|p| !p.is_empty());
     if let Some(load) = data.load_ms {
-        let how = if module.status == Status::Ok {
-            "quiet after"
-        } else {
-            "loaded after"
-        };
-        parts.push(format!("{how} {:.1} s", load / 1000.0));
+        // The time of the load event, whether or not the page went quiet afterwards.
+        parts.push(format!("load {:.1} s", load / 1000.0));
     }
     let head = module_row(
         theme,
@@ -623,7 +619,14 @@ pub(super) mod tests {
             head.contains("Chromium 131") && head.contains("mobile, throttled"),
             "{head}"
         );
-        assert!(head.contains("quiet after 2.1 s"), "{head}");
+        // The load event's time, named for what it is (not for the page being quiet).
+        assert!(head.contains("load 2.1 s") && !head.contains("quiet"), "{head}");
+        // The same wording when the page never went quiet.
+        let mut partial = ok(browser());
+        partial.status = Status::Partial;
+        partial.reason = Some("the page never went quiet".into());
+        let head = row_of(&final_lines(&with_browser(partial), 100, &ascii(), false), "! browser");
+        assert!(head.contains("load 2.1 s") && !head.contains("after"), "{head}");
     }
 
     #[test]
@@ -805,7 +808,7 @@ pub(super) mod tests {
     fn narrow_rows_wrap_instead_of_cutting_facts() {
         let text = plain(&final_lines(&browser_report(), 40, &ascii(), false)).join("\n");
         assert!(
-            text.contains("mobile, throttled") && text.contains("quiet after 2.1 s"),
+            text.contains("mobile, throttled") && text.contains("load 2.1 s"),
             "{text}"
         );
         let reason = "chromium exited before the page finished loading, twice";

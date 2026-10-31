@@ -259,6 +259,72 @@ fn header(host: &str, width: usize, theme: &Theme) -> Vec<String> {
     vec![spread(&left, &theme.bold(&fit(host, room, theme)), width)]
 }
 
+/// The least columns of the AS name worth showing once it has to be cut.
+const MIN_OWNER_NAME: usize = 8;
+
+/// The facts after the closing line's total and status, most useful first.
+struct Facts {
+    /// The protocol and IPv6: they stay.
+    basics: Vec<String>,
+    /// The address of the server.
+    peer: Option<String>,
+    /// The AS number (`AS13335`) when known, and the owner's name.
+    owner: Option<(Option<String>, String)>,
+}
+
+impl Facts {
+    /// The facts as text, in order: the least that fits `room` columns together with a lead of
+    /// `lead_width`. What goes first: the address, then the end of the owner's name (cut with
+    /// an ellipsis down to `MIN_OWNER_NAME` columns), then the name, then the AS number.
+    fn fitted(&self, lead_width: usize, room: usize, theme: &Theme) -> Vec<String> {
+        let build = |peer: bool, owner: Option<String>| -> Vec<String> {
+            let mut facts = self.basics.clone();
+            facts.extend(self.peer.clone().filter(|_| peer));
+            facts.extend(owner);
+            facts
+        };
+        let fits = |facts: &Vec<String>| closing_width(lead_width, facts) <= room;
+        let named = |name: &str| match &self.owner {
+            Some((Some(asn), _)) => format!("{asn} {name}"),
+            _ => name.to_owned(),
+        };
+        let full = self.owner.as_ref().map(|(_, name)| named(name));
+        let mut tries = vec![build(true, full.clone()), build(false, full)];
+        if let Some((_, name)) = &self.owner {
+            let longest = display_width(name);
+            tries.extend(
+                (MIN_OWNER_NAME..longest)
+                    .rev()
+                    .map(|cols| build(false, Some(named(&fit(name, cols, theme))))),
+            );
+        }
+        let number = self.owner.as_ref().and_then(|(asn, _)| asn.clone());
+        tries.push(build(false, number));
+        tries.push(build(false, None));
+        let last = tries.len() - 1;
+        tries
+            .into_iter()
+            .enumerate()
+            .find(|(i, facts)| *i == last || fits(facts))
+            .map(|(_, facts)| facts)
+            .unwrap_or_default()
+    }
+}
+
+/// Columns the total, the status and the facts take on the closing line.
+fn closing_width(lead_width: usize, facts: &[String]) -> usize {
+    if facts.is_empty() {
+        return lead_width;
+    }
+    let facts_width = facts.iter().map(|f| display_width(f)).sum::<usize>() + 3 * (facts.len() - 1);
+    // The lead, a space, the dot and its space, then the facts.
+    if lead_width == 0 {
+        facts_width
+    } else {
+        lead_width + 1 + 2 + facts_width
+    }
+}
+
 /// Everything the network block draws, from events or from the report.
 struct Timeline {
     hops: Vec<Hop>,
@@ -285,35 +351,48 @@ impl Timeline {
         let start = net.redirects_ms;
         // A compact line keeps the protocol and IPv6; the address and the AS are too wide.
         let compact = width < COMPACT;
-        let facts = [
-            net.protocol.map(str::to_owned),
-            net.ipv6.map(|v6| if v6 { "IPv6" } else { "no IPv6" }.to_owned()),
-            net.peer.clone().filter(|_| !compact),
-            report.modules.infra.data.as_ref().filter(|_| !compact).and_then(|i| {
-                let name = i.hosting.clone().or_else(|| i.as_name.as_deref().map(short_as_name))?;
-                Some(i.asn.map_or(name.clone(), |asn| format!("AS{asn} {name}")))
-            }),
-        ];
-        let facts: Vec<String> = facts.into_iter().flatten().map(|f| safe(&f)).collect();
-        let mut closing = Vec::new();
+        let owner = report.modules.infra.data.as_ref().filter(|_| !compact).and_then(|i| {
+            let name = i.hosting.clone().or_else(|| i.as_name.as_deref().map(short_as_name))?;
+            Some((i.asn.map(|asn| format!("AS{asn}")), safe(&name)))
+        });
+        let facts = Facts {
+            basics: [
+                net.protocol.map(str::to_owned),
+                net.ipv6.map(|v6| if v6 { "IPv6" } else { "no IPv6" }.to_owned()),
+            ]
+            .into_iter()
+            .flatten()
+            .map(|f| safe(&f))
+            .collect(),
+            peer: net.peer.clone().filter(|_| !compact).map(|p| safe(&p)),
+            owner,
+        };
+        let mut lead = Vec::new();
+        let mut lead_width = 0;
         if let Some(total) = net.total_ms {
-            closing.push(theme.bold(&format!("{} ms", ms(total))));
+            let text = format!("{} ms", ms(total));
+            lead_width += display_width(&text);
+            lead.push(theme.bold(&text));
         }
         if let Some(code) = net.status {
             let text = code.to_string();
-            closing.push(match code {
+            lead_width += display_width(&text) + if lead.is_empty() { 0 } else { 2 };
+            lead.push(match code {
                 200..=299 => theme.green(&text),
                 300..=399 => theme.yellow(&text),
                 _ => theme.red(&text),
             });
         }
-        let closing = match (closing.is_empty(), facts.is_empty()) {
+        // The frame takes 4 columns (2 when compact) and the last column stays free.
+        let room = width.saturating_sub(1 + if compact { 2 } else { 4 });
+        let facts = facts.fitted(lead_width, room, theme);
+        let closing = match (lead.is_empty(), facts.is_empty()) {
             (true, true) => None,
-            (_, true) => Some(closing.join("  ")),
+            (_, true) => Some(lead.join("  ")),
             (true, false) => Some(theme.dim(&facts.join(" · "))),
             (false, false) => Some(format!(
                 "{} {}",
-                closing.join("  "),
+                lead.join("  "),
                 theme.dim(&format!("· {}", facts.join(" · ")))
             )),
         };
@@ -1189,14 +1268,85 @@ pub(super) mod tests {
 
     #[test]
     fn the_lines_that_set_the_layout_fit_the_width() {
-        // Module text and the closing line are not cut here: the region clips them.
+        // Module text is not cut here: the region clips it. The closing line is fitted.
         for width in [40, 60, 80, 100, 140] {
             let lines = final_lines(&full_report(), width, &ascii(), false);
             for (i, line) in lines.iter().enumerate() {
                 let text = strip(line);
-                let layout = i == 0 || text.ends_with(" ms") || text.contains(". low") || text.contains("! medium");
-                if layout && !text.contains("HTTP/2") {
+                let layout = i == 0
+                    || text.ends_with(" ms")
+                    || text.contains("328 ms")
+                    || text.contains(". low")
+                    || text.contains("! medium");
+                if layout {
                     assert!(display_width(line) < width, "{width}: {text:?}");
+                }
+            }
+        }
+    }
+
+    /// The closing line of a report whose network owner has a long name, at `width`.
+    fn closing_at(width: usize) -> String {
+        let mut report = full_report();
+        report.modules.infra.data.as_mut().unwrap().as_name =
+            Some("LONG-NAMED-TRANSIT-HOLDINGS-AND-SERVICES, US".to_owned());
+        let lines = plain(&final_lines(&report, width, &ascii(), false));
+        lines.into_iter().find(|l| l.contains("328 ms")).expect("closing line")
+    }
+
+    #[test]
+    fn the_closing_line_fits_by_dropping_the_least_useful_parts() {
+        for width in 40..=160 {
+            let closing = closing_at(width);
+            assert!(display_width(&closing) < width, "{width}: {closing:?}");
+            // The total, the status, the protocol and IPv6 always stay.
+            for part in ["328 ms", "200", "HTTP/2", "IPv6"] {
+                assert!(closing.contains(part), "{width}: {part} in {closing:?}");
+            }
+        }
+        // Room for everything: nothing is dropped.
+        let wide = closing_at(160);
+        assert!(wide.contains("2606:4700::6810:7c60") && wide.contains("LONG-NAMED-TRANSIT-HOLDINGS-AND-SERVICES"));
+        // The address goes first; the AS name follows, cut with an ellipsis before it goes.
+        let no_peer = (60..160)
+            .map(closing_at)
+            .find(|c| !c.contains("2606") && c.contains("AS13335"))
+            .expect("a width without the address");
+        assert!(no_peer.contains("LONG-NAMED"), "{no_peer}");
+        let clipped = (60..160)
+            .map(closing_at)
+            .find(|c| c.contains('~') && c.contains("AS13335"))
+            .expect("a width with a cut name");
+        assert!(!clipped.contains("2606") && !clipped.contains("SERVICES"), "{clipped}");
+        // Past the name, the number goes last, and then nothing but the basics.
+        let facts = Facts {
+            basics: vec!["HTTP/2".to_owned(), "IPv6".to_owned()],
+            peer: Some("2606:4700::1".to_owned()),
+            owner: Some((Some("AS13335".to_owned()), "LONG-NAMED-TRANSIT-HOLDINGS".to_owned())),
+        };
+        let fitted = |room| facts.fitted(11, room, &ascii()).join(" · ");
+        assert_eq!(
+            fitted(100),
+            "HTTP/2 · IPv6 · 2606:4700::1 · AS13335 LONG-NAMED-TRANSIT-HOLDINGS"
+        );
+        assert_eq!(fitted(70), "HTTP/2 · IPv6 · AS13335 LONG-NAMED-TRANSIT-HOLDINGS");
+        assert_eq!(fitted(60), "HTTP/2 · IPv6 · AS13335 LONG-NAMED-TRANSIT-HO~");
+        assert_eq!(fitted(50), "HTTP/2 · IPv6 · AS13335 LONG-NAMED-~");
+        assert_eq!(fitted(40), "HTTP/2 · IPv6 · AS13335");
+        assert_eq!(fitted(30), "HTTP/2 · IPv6");
+        assert_eq!(fitted(5), "HTTP/2 · IPv6");
+        // Unicode: the ellipsis is a single column.
+        let theme = Theme {
+            truecolor: false,
+            unicode: true,
+        };
+        let mut report = full_report();
+        report.modules.infra.data.as_mut().unwrap().as_name =
+            Some("LONG-NAMED-TRANSIT-HOLDINGS-AND-SERVICES".to_owned());
+        for width in 60..120 {
+            for line in final_lines(&report, width, &theme, false) {
+                if strip(&line).contains("328 ms") {
+                    assert!(display_width(&line) < width, "{width}: {:?}", strip(&line));
                 }
             }
         }

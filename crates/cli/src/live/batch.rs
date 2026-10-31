@@ -284,7 +284,7 @@ impl BatchView {
         for row in &self.rows {
             let badge = match row.site.as_ref().and_then(|s| s.grade) {
                 Some(grade) => theme.badge(grade),
-                None => theme.dim(&format!(" {} ", theme.glyph(Glyph::Skipped))),
+                None => grade_dash(theme),
             };
             parts.push((1, badge));
         }
@@ -378,6 +378,7 @@ impl BatchView {
     fn line(&self, i: usize, tick: usize, layout: &Layout, width: usize, theme: &Theme) -> String {
         let row = &self.rows[i];
         let dash = || theme.dim(theme.glyph(Glyph::Skipped));
+        let no_grade = || grade_dash(theme);
         let mut cells = vec![(cut(&row.label, layout.site, theme), layout.site)];
         if let Some(end) = row.end {
             // No report: the verdict spans time, grade and tls.
@@ -397,7 +398,7 @@ impl BatchView {
         }
         let Some(site) = &row.site else {
             cells.push((theme.cyan(theme.spinner(tick + i)), TIME));
-            cells.extend([(dash(), GRADE), (dash(), TLS)]);
+            cells.extend([(no_grade(), GRADE), (dash(), TLS)]);
             if self.browser {
                 cells.push((dash(), LCP));
             }
@@ -418,7 +419,7 @@ impl BatchView {
             }
             return join(&cells, width);
         }
-        cells.push((site.grade.map_or_else(dash, |g| theme.badge(g)), GRADE));
+        cells.push((site.grade.map_or_else(no_grade, |g| theme.badge(g)), GRADE));
         cells.push((tls_cell(site.tls_days, theme), TLS));
         if self.browser {
             let lcp = match (row.full, site.lcp) {
@@ -438,6 +439,11 @@ impl BatchView {
         }
         join(&cells, width)
     }
+}
+
+/// A missing grade: a dash as wide as a badge, so it sits under the badges' letters.
+fn grade_dash(theme: &Theme) -> String {
+    theme.dim(&format!(" {} ", theme.glyph(Glyph::Skipped)))
 }
 
 /// The red verdict for a site whose analysis died, in the table and as a line of its own.
@@ -577,6 +583,33 @@ mod tests {
     fn view(inputs: &[&str], browser: bool) -> BatchView {
         let inputs: Vec<String> = inputs.iter().map(|s| (*s).to_owned()).collect();
         BatchView::new(&inputs, browser)
+    }
+
+    #[test]
+    fn a_missing_grade_is_centred_under_the_badges() {
+        let theme = ascii();
+        let mut graded = report("B", 60, 800.0);
+        graded.modules.security.status = Status::Failed;
+        let mut v = view(&["a.example", "b.example", "c.example"], false);
+        v.on_fast(0, &report("B", 60, 800.0));
+        v.on_fast(1, &graded);
+        let rows = plain(&v.take_finished(100, &theme));
+        let badge_at = rows[1].find(" B ").unwrap() + 1;
+        let dash_at = rows[2].find(" - ").expect("a dash cell as wide as a badge") + 1;
+        assert_eq!(badge_at, dash_at, "{rows:#?}");
+        // A row still waiting has the same cell.
+        let wait = plain(&v.frame(0, 100, 24, &theme));
+        assert!(
+            wait.iter().any(|l| l.contains("c.example") && l.contains(" - ")),
+            "{wait:#?}"
+        );
+        let unicode = Theme {
+            truecolor: false,
+            unicode: true,
+        };
+        let mut v = view(&["a.example"], false);
+        v.on_fast(0, &graded);
+        assert!(plain(&v.take_finished(100, &unicode))[1].contains(" – "));
     }
 
     #[test]
