@@ -10,6 +10,8 @@ const USAGE: &str = include_str!("../../../docs/usage.md");
 const METHODOLOGY: &str = include_str!("../../../docs/methodology.md");
 const README: &str = include_str!("../../../README.md");
 const README_PT: &str = include_str!("../../../README.pt-BR.md");
+const NFPM: &str = include_str!("../../../pkg/nfpm.yaml");
+const PKGBUILD: &str = include_str!("../../../pkg/aur/PKGBUILD.in");
 
 const DEMO_GIF: &str = "https://raw.githubusercontent.com/jospnunes/insite/main/assets/demo.gif";
 
@@ -201,6 +203,19 @@ mod tests {
         assert!(
             README_PT.contains(DEMO_GIF),
             "README.pt-BR.md does not show the demo GIF"
+        );
+    }
+
+    #[test]
+    fn package_descriptions_match_cargo() {
+        let description = env!("CARGO_PKG_DESCRIPTION");
+        assert!(
+            NFPM.contains(description),
+            "pkg/nfpm.yaml does not carry the Cargo description"
+        );
+        assert!(
+            PKGBUILD.contains(description),
+            "pkg/aur/PKGBUILD.in does not carry the Cargo description"
         );
     }
 
