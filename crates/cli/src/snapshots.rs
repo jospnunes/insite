@@ -10,7 +10,7 @@ use flate2::Compression;
 use flate2::read::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use insite_core::analyze::analyze_selected;
-use insite_core::report::{Module, Report, Selection};
+use insite_core::report::Selection;
 use insite_core::snapshot::Snapshot;
 
 use crate::live::theme::Theme;
@@ -74,17 +74,6 @@ pub fn read(path: &Path) -> Result<Vec<Snapshot>, String> {
         .collect()
 }
 
-/// The report as the fast collection had it, for a snapshot that has browser data: what
-/// the live view froze before the browser's act.
-fn before_browser(snapshot: &Snapshot, selection: Selection) -> Option<Report> {
-    snapshot.browser.as_ref()?;
-    let mut fast = snapshot.clone();
-    fast.browser = None;
-    let mut report = analyze_selected(&fast, selection);
-    report.modules.browser = Module::skipped("the browser is still loading the page");
-    Some(report)
-}
-
 pub fn analyze_saved(path: &Path, selection: Selection, format: Format) -> ExitCode {
     let snapshots = match read(path) {
         Ok(s) if !s.is_empty() => s,
@@ -104,7 +93,7 @@ pub fn analyze_saved(path: &Path, selection: Selection, format: Format) -> ExitC
                 let full = analyze_selected(snapshot, selection);
                 printer.print(i, &full);
                 Saved {
-                    fast: before_browser(snapshot, selection),
+                    browser: snapshot.browser.is_some(),
                     full,
                 }
             })

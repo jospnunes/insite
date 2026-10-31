@@ -3,10 +3,11 @@
 
 use insite_core::analyze::browser::{Metric, TypeTotal};
 use insite_core::collect::progress::BrowserStage;
-use insite_core::report::{Report, Severity, Status};
+use insite_core::report::{Finding, Report, Severity, Status};
 
 use super::site::{
-    COMPACT, TEXT_AT, finding_line, fit, fit_height, join_sections, mark, mark_glyph, module_row, safe, title_room,
+    COMPACT, TEXT_AT, all_findings, finding_line, fit, fit_height, join_sections, mark, mark_glyph, module_row, safe,
+    title_room,
 };
 use super::theme::{Glyph, MeterColor, Theme};
 use crate::render::{browser_details_text, bytes, metric_value, summary_lines};
@@ -67,9 +68,28 @@ impl BrowserView {
     }
 }
 
+/// What the screen shows above the act, which decides what the act must still say.
+#[derive(Clone, Copy)]
+pub(crate) enum Above<'a> {
+    /// The site block above was drawn from this same report (a saved snapshot, a `-v` batch
+    /// or a run whose fast report never came), so the stack and the findings are already
+    /// there and the act leaves them out.
+    Same,
+    /// The site block above was frozen from `fast`, the report before the browser: the act
+    /// shows the stack as the browser completed it, and the findings that only the browser
+    /// made possible.
+    Fast(&'a Report),
+}
+
 /// The finished act: a pure function of the report, also for saved snapshots. Empty when
 /// the browser was not asked for; verbose appends today's browser details.
-pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Vec<String> {
+pub(crate) fn final_lines(
+    report: &Report,
+    width: usize,
+    theme: &Theme,
+    verbose: bool,
+    above: Above<'_>,
+) -> Vec<String> {
     let module = &report.modules.browser;
     let room = width.saturating_sub(TEXT_AT + 1);
     let reason = safe(module.reason.as_deref().unwrap_or_default());
@@ -127,11 +147,7 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
     let weight = weight_rows(&data.by_type, width, theme);
     let rows = [vitals, facts, weight].concat();
 
-    let stack = report
-        .modules
-        .stack
-        .data
-        .is_some()
+    let stack = (matches!(above, Above::Fast(_)) && report.modules.stack.data.is_some())
         .then(|| {
             // The stack as the browser completed it, in the summary's own 16-colour text.
             let lines = summary_lines(report, &Style::new(true), width.saturating_sub(2), verbose);
@@ -150,7 +166,7 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
     let mut lines = join_sections([
         [head, rows].concat(),
         stack,
-        findings_rows(report, width, theme, verbose),
+        findings_rows(report, width, theme, verbose, above),
         notes,
     ]);
     if verbose {
@@ -338,15 +354,18 @@ fn wrap_row(items: &[String], gap: &str, room: usize) -> Vec<String> {
     lines
 }
 
-/// The browser's own findings: the ones that matter, or all of them with `-v`.
-fn findings_rows(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Vec<String> {
-    let shown: Vec<_> = report
-        .modules
-        .browser
-        .findings
-        .iter()
-        .filter(|f| verbose || f.severity > Severity::Info)
-        .collect();
+/// The browser's own findings: the ones that matter, or all of them with `-v`. After them,
+/// the findings of the other modules that the frozen fast report did not have (a library
+/// version only the page's JavaScript reports, say), so that every mark in the act has its
+/// finding on screen.
+fn findings_rows(report: &Report, width: usize, theme: &Theme, verbose: bool, above: Above<'_>) -> Vec<String> {
+    let matters = |f: &&Finding| verbose || f.severity > Severity::Info;
+    let mut shown: Vec<&Finding> = report.modules.browser.findings.iter().filter(matters).collect();
+    if let Above::Fast(fast) = above {
+        let known: Vec<&str> = all_findings(fast).iter().map(|f| f.id).collect();
+        let new = |f: &&Finding| !known.contains(&f.id) && (verbose || f.severity >= Severity::Medium);
+        shown.extend(all_findings(report).into_iter().filter(new));
+    }
     let id_width = shown.iter().map(|f| f.id.len()).max().unwrap_or(0);
     let room = title_room(width, id_width);
     let titles: Vec<String> = shown.iter().map(|f| fit(&safe(&f.title), room, theme)).collect();
@@ -361,7 +380,7 @@ fn findings_rows(report: &Report, width: usize, theme: &Theme, verbose: bool) ->
 #[cfg(test)]
 pub(super) mod tests {
     use insite_core::analyze::browser::{Browser, Metric, TypeTotal};
-    use insite_core::report::{Finding, Module, Severity, Status};
+    use insite_core::report::{Module, Severity, Status};
 
     use super::*;
     use crate::live::site::tests::{every_escape_is_sgr, plain, strip};
@@ -373,6 +392,11 @@ pub(super) mod tests {
 
     fn ascii() -> Theme {
         Theme::plain_ascii()
+    }
+
+    /// The act as it follows a frozen fast report that already had everything.
+    fn final_lines(report: &Report, width: usize, theme: &Theme, verbose: bool) -> Vec<String> {
+        super::final_lines(report, width, theme, verbose, Above::Fast(report))
     }
 
     fn metric(name: &'static str, value: f64, rating: &'static str) -> Metric {
@@ -653,6 +677,55 @@ pub(super) mod tests {
         assert!(!text.contains("Only for -v"), "{text}");
         let verbose = plain(&final_lines(&report, 100, &ascii(), true)).join("\n");
         assert!(verbose.contains("Only for -v"), "{verbose}");
+    }
+
+    /// A complete report whose stack has a finding the fast one could not have had.
+    fn found_by_the_browser() -> (Report, Report) {
+        let mut full = browser_report();
+        full.modules.browser.findings = vec![finding("perf.tbt.poor", Severity::Medium, "Main thread blocked")];
+        full.modules.stack.findings = vec![
+            finding("stack.library.vulnerable", Severity::High, "Vulnerable library"),
+            finding("stack.library.old", Severity::Low, "Old library"),
+        ];
+        let mut fast = full.clone();
+        fast.modules.browser = Module::skipped("the browser is still loading the page");
+        fast.modules.stack.findings.clear();
+        (fast, full)
+    }
+
+    #[test]
+    fn after_a_frozen_fast_report_the_act_lists_what_the_browser_made_possible() {
+        let (fast, full) = found_by_the_browser();
+        let theme = ascii();
+        let text = plain(&super::final_lines(&full, 100, &theme, false, Above::Fast(&fast)));
+        let at = |id: &str| text.iter().position(|l| l.contains(id));
+        // Its own findings first, then the stack's Medium and above; a low one stays out.
+        assert!(at("perf.tbt.poor") < at("stack.library.vulnerable"), "{text:#?}");
+        assert!(
+            at("stack.library.vulnerable").is_some() && at("stack.library.old").is_none(),
+            "{text:#?}"
+        );
+        // The stack row, with its cross, is in the act.
+        assert!(text.iter().any(|l| l.starts_with("x stack")), "{text:#?}");
+        // Verbose shows every one of them.
+        let text = plain(&super::final_lines(&full, 100, &theme, true, Above::Fast(&fast)));
+        assert!(text.iter().any(|l| l.contains("stack.library.old")), "{text:#?}");
+        // A finding the fast report already had is not said again.
+        let text = plain(&super::final_lines(&full, 100, &theme, false, Above::Fast(&full)));
+        assert!(
+            !text.iter().any(|l| l.contains("stack.library.vulnerable")),
+            "{text:#?}"
+        );
+    }
+
+    #[test]
+    fn above_the_same_report_the_act_repeats_nothing() {
+        let (_, full) = found_by_the_browser();
+        let text = plain(&super::final_lines(&full, 100, &ascii(), false, Above::Same));
+        assert!(!text.iter().any(|l| l.contains("stack")), "{text:#?}");
+        // Only the browser's own findings are the act's.
+        assert!(text.iter().any(|l| l.contains("perf.tbt.poor")));
+        assert!(!text.iter().any(|l| l.contains("stack.library")), "{text:#?}");
     }
 
     #[test]

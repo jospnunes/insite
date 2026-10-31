@@ -19,7 +19,7 @@ use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender, WeakUnboundedS
 use tokio::sync::oneshot;
 
 use batch::BatchView;
-use browser::BrowserView;
+use browser::{Above, BrowserView};
 use site::SiteView;
 use term::Region;
 use theme::Theme;
@@ -230,6 +230,8 @@ struct One {
     site: SiteView,
     /// Present with `--browser`.
     browser: Option<BrowserView>,
+    /// The report frozen in the scrollback before the browser's act.
+    fast: Option<Box<Report>>,
     stage: Stage,
 }
 
@@ -273,6 +275,7 @@ impl<W: Write> Ui<W> {
             [input] => View::One(One {
                 site: SiteView::new(input, selection),
                 browser: browser.then(BrowserView::new),
+                fast: None,
                 stage: Stage::Collecting,
             }),
             _ => View::Batch(Batch {
@@ -319,6 +322,7 @@ impl<W: Write> Ui<W> {
                         // A blank line sets the browser's act apart.
                         let mut lines = site::final_lines(&report, width, theme, verbose);
                         lines.push(String::new());
+                        one.fast = Some(report);
                         lines
                     }
                     UiEvent::Fast { .. } => return Ok(()),
@@ -326,7 +330,7 @@ impl<W: Write> Ui<W> {
                         let mut lines = Vec::new();
                         // No Fast came first (its analysis died, which should not happen), so
                         // nothing is in the scrollback yet: the site block goes out with the
-                        // browser's, and the stack row may repeat.
+                        // browser's, from this same report.
                         if one.stage == Stage::Collecting {
                             lines = site::final_lines(&report, width, theme, verbose);
                             if one.browser.is_some() {
@@ -334,7 +338,8 @@ impl<W: Write> Ui<W> {
                             }
                         }
                         if one.browser.is_some() {
-                            lines.extend(browser::final_lines(&report, width, theme, verbose));
+                            let above = one.fast.as_deref().map_or(Above::Same, Above::Fast);
+                            lines.extend(browser::final_lines(&report, width, theme, verbose, above));
                         }
                         one.stage = Stage::Done;
                         lines
@@ -440,7 +445,7 @@ impl<W: Write> Ui<W> {
                         .kept
                         .iter()
                         .map(|k| {
-                            let site = k.fast.as_deref().or(k.full.as_deref());
+                            let site = k.full.as_deref().or(k.fast.as_deref());
                             (site, k.full.as_deref().filter(|_| batch.browser))
                         })
                         .collect();
@@ -456,8 +461,10 @@ impl<W: Write> Ui<W> {
     }
 }
 
-/// What `-v` adds under a batch: each site's report in input order. The site part comes
-/// from the fast report when there is one; the browser part from the complete one.
+/// What `-v` adds under a batch: each site's report in input order. The site block comes
+/// from the complete report when there is one (the fast one is all a site may have when its
+/// browser never answered); the browser's act, which leaves out what the block above it
+/// already says, only from the complete one.
 fn details(sites: &[(Option<&Report>, Option<&Report>)], width: usize, theme: &Theme) -> Vec<String> {
     let mut lines = Vec::new();
     for (site, browser) in sites {
@@ -466,7 +473,7 @@ fn details(sites: &[(Option<&Report>, Option<&Report>)], width: usize, theme: &T
             lines.extend(site::final_lines(report, width, theme, true));
         }
         if let Some(report) = browser {
-            let act = browser::final_lines(report, width, theme, true);
+            let act = browser::final_lines(report, width, theme, true, Above::Same);
             if site.is_some() && !act.is_empty() {
                 lines.push(String::new());
             }
@@ -476,25 +483,26 @@ fn details(sites: &[(Option<&Report>, Option<&Report>)], width: usize, theme: &T
     lines
 }
 
-/// A saved snapshot, for `--from`: its report, and, when the snapshot has browser data, the
-/// report as it was before the browser.
+/// A saved snapshot, for `--from`: its report, and whether the snapshot has browser data.
 pub(crate) struct Saved {
     pub(crate) full: Report,
-    pub(crate) fast: Option<Report>,
+    pub(crate) browser: bool,
 }
 
 /// `--from` on a terminal: the live view's final frames as plain text, with no animation:
 /// the one-site view, or the batch table.
 pub(crate) fn saved_lines(saved: &[Saved], verbose: bool, width: usize, theme: &Theme) -> Vec<String> {
     if let [one] = saved {
-        let mut lines = site::final_lines(one.fast.as_ref().unwrap_or(&one.full), width, theme, verbose);
-        if one.fast.is_some() {
+        // The site block comes from the complete report, so what only the browser found is in
+        // it; the act then leaves out the stack it would repeat.
+        let mut lines = site::final_lines(&one.full, width, theme, verbose);
+        if one.browser {
             lines.push(String::new());
-            lines.extend(browser::final_lines(&one.full, width, theme, verbose));
+            lines.extend(browser::final_lines(&one.full, width, theme, verbose, Above::Same));
         }
         return lines;
     }
-    let browser = saved.iter().any(|s| s.fast.is_some());
+    let browser = saved.iter().any(|s| s.browser);
     let labels: Vec<String> = saved.iter().map(|s| s.full.target.display_host.clone()).collect();
     let mut table = BatchView::new(&labels, browser);
     for (i, s) in saved.iter().enumerate() {
@@ -510,12 +518,7 @@ pub(crate) fn saved_lines(saved: &[Saved], verbose: bool, width: usize, theme: &
     if verbose {
         let sites: Vec<(Option<&Report>, Option<&Report>)> = saved
             .iter()
-            .map(|s| {
-                (
-                    Some(s.fast.as_ref().unwrap_or(&s.full)),
-                    s.fast.as_ref().map(|_| &s.full),
-                )
-            })
+            .map(|s| (Some(&s.full), s.browser.then_some(&s.full)))
             .collect();
         lines.extend(details(&sites, width, theme));
     }
@@ -876,6 +879,98 @@ mod tests {
         assert!(!text.contains("s3cret"), "{}", visible(&text));
     }
 
+    /// Counts the rows of the stack module in `lines` (a mark, then `stack`).
+    fn stack_rows(lines: &str) -> usize {
+        lines
+            .lines()
+            .filter(|l| l.get(1..).is_some_and(|r| r.trim_start().starts_with("stack")) && !l.starts_with(' '))
+            .count()
+    }
+
+    #[test]
+    fn static_output_has_what_only_the_browser_found_once() {
+        use crate::live::browser::tests::browser_report;
+        let mut full = browser_report();
+        full.modules.stack.findings = vec![insite_finding("stack.library.vulnerable", "Vulnerable library")];
+        // The finding's line, not the hint that names its id.
+        let id = "Vulnerable library";
+
+        // --from: the site block has the full stack, the act does not repeat it.
+        let saved = vec![Saved {
+            full: full.clone(),
+            browser: true,
+        }];
+        let text = visible(&saved_lines(&saved, false, 100, &theme()).join("\n"));
+        assert_eq!(text.matches(id).count(), 1, "{text}");
+        assert_eq!(stack_rows(&text), 1, "{text}");
+        assert!(text.contains("x stack") && text.contains("LCP"), "{text}");
+
+        // The -v details of a batch likewise.
+        let sites = [(Some(&full), Some(&full))];
+        let text = visible(&details(&sites, 100, &theme()).join("\n"));
+        assert_eq!(text.matches(id).count(), 1, "{text}");
+        assert_eq!(stack_rows(&text), 1, "{text}");
+        assert!(text.contains("LCP"), "{text}");
+
+        // A batch ending with -v and the browser: the finding is in the findings group and, once, in the details.
+        let mut fast = full.clone();
+        fast.modules.stack.findings.clear();
+        fast.modules.browser = Module::skipped("the browser is still loading the page");
+        let events = vec![
+            UiEvent::Fast {
+                site: 0,
+                report: Box::new(fast),
+            },
+            UiEvent::Full {
+                site: 0,
+                report: Box::new(full),
+            },
+            self::full(1),
+        ];
+        let text = visible(&run_ui(&["a.example", "b.example"], true, true, events));
+        let summary = text.rfind("2 sites in").expect("the summary");
+        let details_at = summary + text[summary..].find("* insite").expect("the first site's header");
+        assert_eq!(
+            text[summary..details_at].matches(id).count(),
+            1,
+            "the findings group: {text}"
+        );
+        assert_eq!(text[details_at..].matches(id).count(), 1, "{text}");
+    }
+
+    fn insite_finding(id: &'static str, title: &str) -> insite_core::report::Finding {
+        crate::render::tests::finding(id, insite_core::report::Severity::High, title)
+    }
+
+    #[test]
+    fn the_live_browser_act_lists_what_the_frozen_block_could_not_have() {
+        use crate::live::browser::tests::browser_report;
+        let mut full = browser_report();
+        full.modules.stack.findings = vec![insite_finding("stack.library.vulnerable", "Vulnerable library")];
+        let mut fast = full.clone();
+        fast.modules.stack.findings.clear();
+        fast.modules.browser = Module::skipped("the browser is still loading the page");
+        let events = vec![
+            UiEvent::Fast {
+                site: 0,
+                report: Box::new(fast.clone()),
+            },
+            UiEvent::Full {
+                site: 0,
+                report: Box::new(full),
+            },
+        ];
+        let text = visible(&run_ui(&["example.com"], false, true, events));
+        // After the frozen block (which does not have it) and once; the stack row appears
+        // in the block and, completed, in the act.
+        let frozen = visible(&site::final_lines(&fast, 100, &theme(), false).join("\n"));
+        let act_at = text.find("LCP").expect("the act");
+        assert_eq!(text.matches("Vulnerable library").count(), 1, "{text}");
+        assert!(text.find("Vulnerable library") > Some(act_at), "{text}");
+        assert!(text.contains(frozen.lines().next().unwrap()));
+        assert!(text[act_at..].contains("x stack"), "{text}");
+    }
+
     #[test]
     fn a_message_is_committed_above_the_region() {
         let text = run_ui(
@@ -1040,11 +1135,11 @@ mod tests {
         let saved = vec![
             Saved {
                 full: full_report(),
-                fast: None,
+                browser: false,
             },
             Saved {
                 full: unreachable,
-                fast: None,
+                browser: false,
             },
         ];
         let lines = saved_lines(&saved, false, 100, &theme());
