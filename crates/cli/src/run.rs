@@ -12,7 +12,7 @@ use insite_core::collect::browser::{Browser, Visit};
 use insite_core::collect::deadline::Deadline;
 use insite_core::collect::dns::Resolver;
 use insite_core::collect::records::registrable;
-use insite_core::collect::target::Target;
+use insite_core::collect::target::{Target, display_host};
 use insite_core::collect::tls::Tls;
 use insite_core::collect::{Collector, Options};
 use insite_core::report::{Module, ModuleName, Outcome, Report, Selection};
@@ -79,8 +79,8 @@ pub fn run(mut plan: Plan) -> ExitCode {
                 }
                 // A target's index is its position among the valid ones: it orders like the
                 // input and is the row of the live view.
+                shown.push(live_label(&t));
                 targets.push((targets.len(), t));
-                shown.push(input.clone());
             }
             Err(e) => {
                 eprintln!("insite: {input}: {e}");
@@ -306,6 +306,20 @@ pub fn run(mut plan: Plan) -> ExitCode {
     if *stop.borrow() { ExitCode::from(130) } else { code }
 }
 
+/// What the live view calls a site: the host as people write it, and the port when the input
+/// named one. Never the typed credentials, which the target has already dropped.
+fn live_label(target: &Target) -> String {
+    // An IPv6 address keeps its brackets, as people write it.
+    let host = match target.url.host_str() {
+        Some(ipv6) if ipv6.starts_with('[') => ipv6.to_owned(),
+        _ => display_host(&target.url),
+    };
+    match target.url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    }
+}
+
 /// Waits for one of the browser slots. The returned deadline, `timeout` long,
 /// starts when the slot is held.
 async fn acquire_browser_slot(
@@ -512,6 +526,16 @@ pub(crate) fn write_out(text: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_live_label_has_the_host_and_port_but_no_credentials() {
+        let label = |input: &str| live_label(&Target::parse(input).unwrap());
+        assert_eq!(label("https://user:s3cret@127.0.0.1:9/"), "127.0.0.1:9");
+        assert_eq!(label("user:s3cret@example.com/a?b=1"), "example.com");
+        assert_eq!(label("http://u@[::1]:8080/"), "[::1]:8080");
+        assert_eq!(label("açaí.com.br"), "açaí.com.br");
+        assert_eq!(label("EXAMPLE.com:443"), "example.com");
+    }
 
     #[test]
     fn groups_keep_input_order_and_share_domains() {

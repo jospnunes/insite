@@ -198,10 +198,13 @@ pub(crate) fn final_lines(report: &Report, width: usize, theme: &Theme, verbose:
     lines
 }
 
-/// The host part of an input (no scheme, path, query or fragment), clean and on one line.
+/// The host part of an input (no scheme, `user:pass@`, path, query or fragment), clean and
+/// on one line. The CLI already hands over names without credentials; this is the second
+/// lock, since what is typed in a URL must never reach the screen.
 pub(super) fn host_of(input: &str) -> String {
     let host = input.split_once("://").map_or(input, |(_, rest)| rest);
-    safe(host.split(['/', '?', '#']).next().unwrap_or(host))
+    let authority = host.split(['/', '?', '#']).next().unwrap_or(host);
+    safe(authority.rsplit_once('@').map_or(authority, |(_, host)| host))
 }
 
 /// Page-controlled text that is safe to color and stays on one line.
@@ -873,6 +876,23 @@ pub(super) mod tests {
         assert_eq!(hidden, whole.len() - shown - blanks, "{lines:#?}");
         // Never an empty frame with room, never a line with none.
         assert!(view.frame(0, 100, 1, &ascii()).is_empty());
+    }
+
+    #[test]
+    fn credentials_typed_in_the_url_are_never_shown() {
+        assert_eq!(
+            host_of("https://user:s3cret@example.com:8443/x?y=1#z"),
+            "example.com:8443"
+        );
+        assert_eq!(host_of("user:s3cret@example.com"), "example.com");
+        assert_eq!(host_of("https://user:p@ss@example.com/"), "example.com");
+        assert_eq!(host_of("https://example.com/a@b"), "example.com");
+        let view = SiteView::new("https://user:s3cret@example.com/", Selection::all());
+        let text = plain(&view.frame(0, 100, TALL, &ascii())).join("\n");
+        assert!(
+            text.contains("example.com") && !text.contains("s3cret") && !text.contains("user:"),
+            "{text}"
+        );
     }
 
     #[test]

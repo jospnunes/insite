@@ -580,6 +580,23 @@ mod tests {
     }
 
     #[test]
+    fn credentials_typed_in_the_url_never_reach_a_row() {
+        let theme = ascii();
+        let mut v = view(&["https://user:s3cret@a.example:8443/x", "b.example"], false);
+        v.on_fast(0, &report("B", 60, 800.0));
+        v.on_fast(1, &report("A", 60, 800.0));
+        let mut all = v.take_finished(100, &theme);
+        all.extend(v.summary_lines(None, 100, &theme));
+        all.extend(v.findings_lines(100, &theme));
+        let text = plain(&all).join("\n");
+        assert!(text.contains("a.example:8443"), "{text}");
+        assert!(!text.contains("s3cret") && !text.contains("user:"), "{text}");
+        // Nor in the pending row of the live frame.
+        let v = view(&["https://user:s3cret@a.example/"], false);
+        assert!(!plain(&v.frame(0, 100, 24, &theme)).join("\n").contains("s3cret"));
+    }
+
+    #[test]
     fn rows_reach_the_scrollback_in_input_order() {
         let theme = ascii();
         let mut v = view(&["a.com", "b.com", "c.com"], false);

@@ -867,6 +867,16 @@ mod tests {
     }
 
     #[test]
+    fn credentials_typed_in_a_url_do_not_reach_the_terminal() {
+        let inputs = ["https://user:s3cret@a.example/", "https://user:s3cret@b.example/"];
+        let events = vec![full(0), UiEvent::Gone { site: 1 }];
+        let text = run_ui(&inputs, true, false, events);
+        assert!(!text.contains("s3cret"), "{}", visible(&text));
+        let text = run_ui(&inputs[..1], true, false, vec![full(0)]);
+        assert!(!text.contains("s3cret"), "{}", visible(&text));
+    }
+
+    #[test]
     fn a_message_is_committed_above_the_region() {
         let text = run_ui(
             &["example.com"],
