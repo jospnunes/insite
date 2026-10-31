@@ -192,6 +192,43 @@ async fn progress_follows_the_chain() {
     }
 }
 
+/// A refused connection takes the error arm, yet every part is still reported once.
+#[tokio::test(flavor = "multi_thread")]
+async fn progress_reports_every_part_once_when_the_connection_fails() {
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+    let mut opts = options();
+    opts.progress = Some(tx);
+    let target = Target::parse(&format!("https://localhost:{port}/")).unwrap();
+    let snap = Collector::new(&[]).unwrap().collect(&target, &opts).await;
+    assert_eq!(
+        snap.failure.as_ref().map(|f| f.kind),
+        Some(FailureKind::Connect),
+        "{:?}",
+        snap.failure
+    );
+
+    let mut events = Vec::new();
+    while let Ok(event) = rx.try_recv() {
+        events.push(event);
+    }
+    let parts = [
+        Part::Page,
+        Part::HttpCheck,
+        Part::Records(DomainRole::Input),
+        Part::Records(DomainRole::Final),
+        Part::Auxiliary,
+        Part::Asn,
+    ];
+    for part in parts {
+        let n = events.iter().filter(|e| **e == Progress::Done(part)).count();
+        assert_eq!(n, 1, "{part:?} in {events:?}");
+    }
+}
+
 /// `user:pass@` in the input or in a redirect never reaches the snapshot.
 #[tokio::test(flavor = "multi_thread")]
 async fn credentials_in_urls_are_not_stored() {

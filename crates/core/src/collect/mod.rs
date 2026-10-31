@@ -157,7 +157,7 @@ impl Collector {
         // The page, the port 80 check and the input domain's records all start at t = 0.
         let mut chain = Vec::new();
         let mut visited = HashSet::new();
-        let (main_result, check_step, input_records) = tokio::join!(
+        let (main_result, (check_step, route), input_records) = tokio::join!(
             async {
                 let result = main.follow(target.url.clone(), &mut chain, &mut visited).await;
                 // A failed main chain may still get its page from the port 80 fallback: that settles later.
@@ -167,10 +167,32 @@ impl Collector {
                 result
             },
             async {
-                match &check_url {
+                let step = match &check_url {
                     Some(url) => Some(side.step(url, opts.body_limit).await),
                     None => None,
+                };
+                // A first redirect to another plain HTTP address says nothing about where
+                // the visitor ends up; follow it, so the redirection grade is exact.
+                let mut route = Vec::new();
+                if let Some(Ok(step)) = &step
+                    && let Some(first) = step.next.as_ref().filter(|n| n.scheme() == "http")
+                {
+                    let mut next = Some(first.clone());
+                    while let Some(url) = next.take().filter(|_| route.len() < 5) {
+                        route.push(url.to_string());
+                        match side.step(&url, REDIRECT_BODY_LIMIT).await {
+                            Ok(s) => match s.next {
+                                Some(n) if n.scheme() == "http" => next = Some(n),
+                                Some(n) => route.push(n.to_string()),
+                                None => {}
+                            },
+                            Err(_) => break,
+                        }
+                    }
                 }
+                // The check and its route are done here, not when the page finishes.
+                emit(&opts.progress, Progress::Done(Part::HttpCheck));
+                (step, route)
             },
             async {
                 let records = match &input_host {
@@ -182,25 +204,6 @@ impl Collector {
             }
         );
 
-        // A first redirect to another plain HTTP address says nothing about where
-        // the visitor ends up; follow it, so the redirection grade is exact.
-        let mut route = Vec::new();
-        if let Some(Ok(step)) = &check_step
-            && let Some(first) = step.next.as_ref().filter(|n| n.scheme() == "http")
-        {
-            let mut next = Some(first.clone());
-            while let Some(url) = next.take().filter(|_| route.len() < 5) {
-                route.push(url.to_string());
-                match side.step(&url, REDIRECT_BODY_LIMIT).await {
-                    Ok(s) => match s.next {
-                        Some(n) if n.scheme() == "http" => next = Some(n),
-                        Some(n) => route.push(n.to_string()),
-                        None => {}
-                    },
-                    Err(_) => break,
-                }
-            }
-        }
         let http_check = check_step.as_ref().map(|step| match step {
             Ok(step) => HttpCheck::Response {
                 status: step.hop.status,
@@ -209,7 +212,6 @@ impl Collector {
             },
             Err(failure) => HttpCheck::Failed(failure.clone()),
         });
-        emit(&opts.progress, Progress::Done(Part::HttpCheck));
 
         let (mut page, mut failure, mut https_fallback) = (None, None, None);
         match main_result {
@@ -533,6 +535,7 @@ impl<'a> Session<'a> {
                 return Err(failure(FailureKind::TooManyRedirects, &url, message));
             }
             self.hop = chain.len();
+            let started = Instant::now();
             let step = self.step(&url, self.opts.body_limit).await?;
             if let (Some(next), true) = (&step.next, self.progress.is_some()) {
                 emit(
@@ -542,7 +545,7 @@ impl<'a> Session<'a> {
                         from: step.hop.url.clone(),
                         to: next.to_string(),
                         status: step.hop.status,
-                        took: step.hop.ttfb + step.hop.download,
+                        took: started.elapsed(),
                     },
                 );
             }

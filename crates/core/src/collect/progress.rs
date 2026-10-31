@@ -13,7 +13,8 @@ pub enum Progress {
     /// chain (0 = first request). A retried attempt may report a phase again: the
     /// last one per `(hop, phase)` wins. A reused connection has no Dns/Tcp/Tls.
     Phase { hop: usize, phase: Phase, took: Duration },
-    /// Hop `hop` answered with a redirect to `to`; `took` is its time to the end of the body.
+    /// Hop `hop` answered with a redirect to `to`; `took` is the hop's whole time:
+    /// connection phases (if new), headers and body, retries included.
     Redirect {
         hop: usize,
         from: String,
