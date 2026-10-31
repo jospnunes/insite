@@ -50,6 +50,13 @@ enum Tone {
     Track,
 }
 
+/// SGR code of a basic color: `base` is 30 (foreground) or 40 (background), and the
+/// bright variants sit 60 higher.
+fn basic_code(base: u8, bright: bool, n: u8) -> String {
+    let base = if bright { base + 60 } else { base };
+    (base + n).to_string()
+}
+
 impl Tone {
     fn rgb(self) -> (u8, u8, u8) {
         match self {
@@ -136,7 +143,7 @@ impl Theme {
             return format!("38;2;{r};{g};{b}");
         }
         let (n, bright) = tone.basic();
-        format!("{}", if bright { 90 } else { 30 } + n)
+        basic_code(30, bright, n)
     }
 
     /// SGR parameters for a background color.
@@ -146,7 +153,7 @@ impl Theme {
             return format!("48;2;{r};{g};{b}");
         }
         let (n, bright) = tone.basic();
-        format!("{}", if bright { 100 } else { 40 } + n)
+        basic_code(40, bright, n)
     }
 
     fn paint(&self, params: &str, text: &str) -> String {
@@ -290,11 +297,12 @@ impl Theme {
         if grade.is_empty() {
             return String::new();
         }
-        let tone = match grade {
-            "A+" | "A" | "B" => Tone::Green,
-            "C" => Tone::Yellow,
-            "D" => Tone::Orange,
-            "F" => Tone::Red,
+        // By letter: the security grade also comes as A-, B+, C-, D+ and so on.
+        let tone = match grade.chars().next() {
+            Some('A' | 'B') => Tone::Green,
+            Some('C') => Tone::Yellow,
+            Some('D') => Tone::Orange,
+            Some('F') => Tone::Red,
             _ => Tone::Dim,
         };
         let text = if self.truecolor {
@@ -482,6 +490,26 @@ mod tests {
             unicode: true,
         };
         assert_eq!(basic.brand("ab"), "\x1b[1;36mab\x1b[0m");
+    }
+
+    #[test]
+    fn badge_colors_by_the_letter_of_the_grade() {
+        let rgb = Theme {
+            truecolor: true,
+            unicode: true,
+        };
+        for g in ["A-", "B+", "B-"] {
+            assert!(rgb.badge(g).contains("48;2;63;185;80"), "{g}");
+        }
+        for g in ["C+", "C-"] {
+            assert!(rgb.badge(g).contains("48;2;210;153;34"), "{g}");
+        }
+        for g in ["D+", "D-"] {
+            assert!(rgb.badge(g).contains("48;2;219;109;40"), "{g}");
+        }
+        let basic = Theme::plain_ascii();
+        assert_eq!(basic.badge("A-"), "\x1b[1;30;42m A- \x1b[0m");
+        assert_eq!(basic.badge("D+"), "\x1b[1;30;43m D+ \x1b[0m");
     }
 
     #[test]
