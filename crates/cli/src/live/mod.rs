@@ -387,14 +387,14 @@ impl<W: Write> Ui<W> {
         match &mut self.view {
             View::One(one) => {
                 let lines = match one.stage {
-                    Stage::Collecting => one.site.frame(frame, width, theme),
+                    Stage::Collecting => one.site.frame(frame, width, height, theme),
                     Stage::Browsing => one
                         .browser
                         .as_ref()
-                        .map_or_else(Vec::new, |b| b.frame(frame, width, theme)),
+                        .map_or_else(Vec::new, |b| b.frame(frame, width, height, theme)),
                     Stage::Done => return Ok(()),
                 };
-                self.region.draw(&lines, width)
+                self.region.draw(&lines, width, height)
             }
             View::Batch(batch) => {
                 let finished = batch.table.take_finished(width, theme);
@@ -404,7 +404,8 @@ impl<W: Write> Ui<W> {
                 if !batch.table.pending() {
                     return Ok(());
                 }
-                self.region.draw(&batch.table.frame(frame, width, height, theme), width)
+                self.region
+                    .draw(&batch.table.frame(frame, width, height, theme), width, height)
             }
         }
     }
@@ -415,13 +416,14 @@ impl<W: Write> Ui<W> {
         let (theme, verbose) = (&self.theme, self.verbose);
         match &mut self.view {
             View::One(one) => {
-                // Interrupted before the report: the frame as it stands.
+                // Interrupted before the report: the frame as it stands, whole, since it goes
+                // to the scrollback and is never redrawn.
                 let lines = match one.stage {
-                    Stage::Collecting => one.site.frame(self.frame, width, theme),
+                    Stage::Collecting => one.site.frame(self.frame, width, usize::MAX, theme),
                     Stage::Browsing => one
                         .browser
                         .as_ref()
-                        .map_or_else(Vec::new, |b| b.frame(self.frame, width, theme)),
+                        .map_or_else(Vec::new, |b| b.frame(self.frame, width, usize::MAX, theme)),
                     Stage::Done => Vec::new(),
                 };
                 if !lines.is_empty() {
@@ -449,7 +451,7 @@ impl<W: Write> Ui<W> {
         }
         // Whatever failed above, the terminal must get its cursor back. The last draw is at
         // today's width, which `finish` reuses to clear what is left.
-        let _ = self.region.draw(&[], width);
+        let _ = self.region.draw(&[], width, usize::MAX);
         self.region.finish()
     }
 }
@@ -651,6 +653,80 @@ mod tests {
                 visible(&out.text())
             );
             thread::sleep(Duration::from_millis(1));
+        }
+    }
+
+    /// The distances of every cursor-up (`ESC [ n A`) in `text`.
+    fn cursor_ups(text: &str) -> Vec<usize> {
+        text.split("\x1b[")
+            .skip(1)
+            .filter_map(|rest| {
+                let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+                rest[digits.len()..].starts_with('A').then(|| digits.parse().unwrap())
+            })
+            .collect()
+    }
+
+    /// Phases for two hops, so that a one-site frame has more lines than a short terminal.
+    fn busy_site() -> Vec<UiEvent> {
+        use insite_core::collect::progress::Phase;
+        let progress = |event| UiEvent::Progress { site: 0, event };
+        let mut events = vec![progress(Progress::Redirect {
+            hop: 0,
+            from: "https://example.com/".to_owned(),
+            to: "https://www.example.com/".to_owned(),
+            status: 301,
+            took: Duration::from_millis(40),
+        })];
+        for (phase, ms) in [(Phase::Dns, 7), (Phase::Tcp, 13), (Phase::Tls, 14), (Phase::Ttfb, 99)] {
+            events.push(progress(Progress::Phase {
+                hop: 1,
+                phase,
+                took: Duration::from_millis(ms),
+            }));
+        }
+        events
+    }
+
+    #[test]
+    fn a_one_site_frame_stays_within_a_short_terminal() {
+        // Ten rows: no cursor-up may go back further than nine lines, with or without the
+        // browser, or the lines that scrolled away pile up in the scrollback.
+        for browser in [false, true] {
+            let out = Shared::default();
+            let tick = Duration::from_millis(5);
+            let (tx, thread) = spawn_ui_with(
+                out.clone(),
+                100,
+                10,
+                tick,
+                hosts(&["example.com"]),
+                Selection::all(),
+                false,
+                browser,
+            );
+            for event in busy_site() {
+                tx.send(event).unwrap();
+            }
+            // Several redraws, so there are moves up to check.
+            wait_for(&out, "a redraw", |text| cursor_ups(text).len() >= 3);
+            if browser {
+                let mut fast = full_report();
+                fast.modules.browser = Module::skipped("the browser is still loading the page");
+                tx.send(UiEvent::Fast {
+                    site: 0,
+                    report: Box::new(fast),
+                })
+                .unwrap();
+                wait_for(&out, "the browser row", |text| text.contains("launching"));
+                thread::sleep(Duration::from_millis(30));
+            }
+            drop(tx);
+            join(thread, PATIENCE);
+            let ups = cursor_ups(&out.text());
+            assert!(ups.iter().all(|&n| n <= 9), "browser {browser}: {ups:?}");
+            // The frame does use the room it has.
+            assert!(browser || ups.iter().any(|&n| n >= 7), "{ups:?}");
         }
     }
 

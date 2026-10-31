@@ -5,7 +5,9 @@ use insite_core::analyze::browser::{Metric, TypeTotal};
 use insite_core::collect::progress::BrowserStage;
 use insite_core::report::{Report, Severity, Status};
 
-use super::site::{COMPACT, TEXT_AT, finding_line, fit, join_sections, mark, mark_glyph, module_row, safe, title_room};
+use super::site::{
+    COMPACT, TEXT_AT, finding_line, fit, fit_height, join_sections, mark, mark_glyph, module_row, safe, title_room,
+};
 use super::theme::{Glyph, MeterColor, Theme};
 use crate::render::{browser_details_text, bytes, metric_value, summary_lines};
 use crate::style::{Style, display_width, neutralize};
@@ -47,9 +49,9 @@ impl BrowserView {
         self.stage = None;
     }
 
-    /// The `browser` row with a spinner and what Chromium is doing. The report replaces it
-    /// with `final_lines` when the browser is done.
-    pub(crate) fn frame(&self, tick: usize, width: usize, theme: &Theme) -> Vec<String> {
+    /// The `browser` row with a spinner and what Chromium is doing, at most `height - 1`
+    /// lines. The report replaces it with `final_lines` when the browser is done.
+    pub(crate) fn frame(&self, tick: usize, width: usize, height: usize, theme: &Theme) -> Vec<String> {
         let activity = match self.stage {
             None => "launching",
             Some(BrowserStage::Navigating) => "loading the page",
@@ -57,7 +59,11 @@ impl BrowserView {
             Some(BrowserStage::Quiet) => "measuring",
         };
         let text = theme.dim(&fit(activity, width.saturating_sub(TEXT_AT + 1), theme));
-        module_row(theme, &theme.cyan(theme.spinner(tick)), "browser", &text)
+        fit_height(
+            module_row(theme, &theme.cyan(theme.spinner(tick)), "browser", &text),
+            height,
+            theme,
+        )
     }
 }
 
@@ -362,6 +368,9 @@ pub(super) mod tests {
     use crate::render::tests::{HOSTILE, finding, full_report};
     use crate::style::display_width;
 
+    /// A height no test frame reaches.
+    const TALL: usize = 100;
+
     fn ascii() -> Theme {
         Theme::plain_ascii()
     }
@@ -440,7 +449,7 @@ pub(super) mod tests {
     #[test]
     fn stages_change_the_activity_text() {
         let mut view = BrowserView::new();
-        let text = |view: &BrowserView| plain(&view.frame(0, 100, &ascii())).join("\n");
+        let text = |view: &BrowserView| plain(&view.frame(0, 100, TALL, &ascii())).join("\n");
         assert!(text(&view).contains("browser") && text(&view).contains("launching"));
         view.launched();
         assert!(text(&view).contains("launching"));
@@ -460,8 +469,8 @@ pub(super) mod tests {
     #[test]
     fn the_row_spins() {
         let view = BrowserView::new();
-        let a = view.frame(0, 100, &ascii());
-        let b = view.frame(1, 100, &ascii());
+        let a = view.frame(0, 100, TALL, &ascii());
+        let b = view.frame(1, 100, TALL, &ascii());
         assert_eq!(a.len(), 1);
         assert_ne!(a, b);
     }

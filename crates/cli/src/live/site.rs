@@ -110,8 +110,10 @@ impl SiteView {
         }
     }
 
-    /// The lines to draw now. When the report is in, the UI commits `final_lines` instead.
-    pub(crate) fn frame(&self, tick: usize, width: usize, theme: &Theme) -> Vec<String> {
+    /// The lines to draw now, at most `height - 1`: the header and the phase rows come
+    /// first, and the module rows that do not fit are counted on a last line. When the
+    /// report is in, the UI commits `final_lines` instead.
+    pub(crate) fn frame(&self, tick: usize, width: usize, height: usize, theme: &Theme) -> Vec<String> {
         // The hop being fetched is the one after the last redirect seen.
         let current = self.hops.keys().next_back().map_or(0, |h| h + 1);
         let hops: Vec<Hop> = self.hops.values().cloned().collect();
@@ -141,8 +143,29 @@ impl SiteView {
                 module_row(theme, &glyph, label, &text)
             })
             .collect();
-        join_sections([header(&self.host, width, theme), block.rows(width, theme), rows])
+        let lines = join_sections([header(&self.host, width, theme), block.rows(width, theme), rows]);
+        fit_height(lines, height, theme)
     }
+}
+
+/// `lines` cut to at most `height - 1` (a frame as tall as the terminal would scroll): the
+/// tail goes, counted on a last dim `+N more` line.
+pub(super) fn fit_height(mut lines: Vec<String>, height: usize, theme: &Theme) -> Vec<String> {
+    let limit = height.saturating_sub(1);
+    if lines.len() <= limit {
+        return lines;
+    }
+    if limit == 0 {
+        return Vec::new();
+    }
+    // One line of the limit is for the count.
+    let gone = lines.split_off(limit - 1);
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+    let hidden = gone.iter().filter(|l| !l.is_empty()).count();
+    lines.push(format!("  {}", theme.dim(&format!("+{hidden} more"))));
+    lines
 }
 
 /// The finished view of one report: a pure function of it, also used for saved snapshots.
@@ -654,6 +677,9 @@ pub(super) mod tests {
     use crate::render::tests::{HOSTILE, finding, full_report, hostile_report};
     use crate::style::display_width;
 
+    /// A height no test frame reaches.
+    const TALL: usize = 100;
+
     fn ascii() -> Theme {
         Theme::plain_ascii()
     }
@@ -725,11 +751,11 @@ pub(super) mod tests {
     fn phases_appear_as_they_arrive() {
         let mut view = SiteView::new("example.com", Selection::all());
         view.on_progress(&phase(0, Phase::Dns, 7));
-        let lines = view.frame(0, 100, &ascii());
+        let lines = view.frame(0, 100, TALL, &ascii());
         assert!(phase_row(&lines, "dns").is_some(), "{lines:#?}");
         assert!(phase_row(&lines, "tcp").is_none(), "{lines:#?}");
         view.on_progress(&phase(0, Phase::Tcp, 13));
-        let lines = view.frame(0, 100, &ascii());
+        let lines = view.frame(0, 100, TALL, &ascii());
         assert!(phase_row(&lines, "tcp").is_some(), "{lines:#?}");
         // A bar is drawn in the row.
         assert!(strip(phase_row(&lines, "tcp").unwrap()).contains('#'));
@@ -746,14 +772,14 @@ pub(super) mod tests {
             status: 301,
             took: ms(77),
         });
-        let lines = plain(&view.frame(0, 100, &ascii()));
+        let lines = plain(&view.frame(0, 100, TALL, &ascii()));
         let hop = lines.iter().find(|l| l.contains("--301-->")).expect("hop line");
         assert!(hop.contains("example.com --301--> www.example.com"), "{hop}");
         assert!(hop.trim_end().ends_with("77 ms"), "{hop}");
         // The redirected hop's own phases are gone; the next hop starts empty.
-        assert!(phase_row(&view.frame(0, 100, &ascii()), "dns").is_none());
+        assert!(phase_row(&view.frame(0, 100, TALL, &ascii()), "dns").is_none());
         view.on_progress(&phase(1, Phase::Ttfb, 199));
-        assert!(phase_row(&view.frame(0, 100, &ascii()), "ttfb").is_some());
+        assert!(phase_row(&view.frame(0, 100, TALL, &ascii()), "ttfb").is_some());
     }
 
     #[test]
@@ -762,35 +788,97 @@ pub(super) mod tests {
         let mut view = SiteView::new("example.com", Selection::all());
         view.on_progress(&Progress::Done(Part::Page));
         // The ASCII spinner at tick 0 is `|`, at tick 1 `/`.
-        let security = |view: &SiteView, tick| row(&view.frame(tick, 100, &theme), "security").unwrap();
+        let security = |view: &SiteView, tick| row(&view.frame(tick, 100, TALL, &theme), "security").unwrap();
         assert!(security(&view, 0).starts_with('|'), "{}", security(&view, 0));
         assert!(security(&view, 1).starts_with('/'));
         // TLS needs only the page: it is collected already.
-        let tls = row(&view.frame(0, 100, &theme), "tls").unwrap();
+        let tls = row(&view.frame(0, 100, TALL, &theme), "tls").unwrap();
         assert!(tls.starts_with('.') && tls.contains("collected"), "{tls}");
         // dns waits for the final domain's records.
-        assert!(row(&view.frame(0, 100, &theme), "dns").unwrap().starts_with('|'));
+        assert!(row(&view.frame(0, 100, TALL, &theme), "dns").unwrap().starts_with('|'));
         view.on_progress(&Progress::Done(Part::HttpCheck));
         let line = security(&view, 0);
         assert!(line.starts_with('.') && line.contains("collected"), "{line}");
         // stack needs the auxiliary files too; infra the AS lookup.
-        assert!(row(&view.frame(0, 100, &theme), "stack").unwrap().starts_with('|'));
+        assert!(
+            row(&view.frame(0, 100, TALL, &theme), "stack")
+                .unwrap()
+                .starts_with('|')
+        );
         view.on_progress(&Progress::Done(Part::Auxiliary));
         view.on_progress(&Progress::Done(Part::Records(DomainRole::Input)));
-        assert!(row(&view.frame(0, 100, &theme), "stack").unwrap().starts_with('.'));
-        assert!(row(&view.frame(0, 100, &theme), "dns").unwrap().starts_with('|'));
+        assert!(
+            row(&view.frame(0, 100, TALL, &theme), "stack")
+                .unwrap()
+                .starts_with('.')
+        );
+        assert!(row(&view.frame(0, 100, TALL, &theme), "dns").unwrap().starts_with('|'));
         view.on_progress(&Progress::Done(Part::Records(DomainRole::Final)));
-        assert!(row(&view.frame(0, 100, &theme), "dns").unwrap().starts_with('.'));
-        assert!(row(&view.frame(0, 100, &theme), "email").unwrap().starts_with('.'));
-        assert!(row(&view.frame(0, 100, &theme), "infra").unwrap().starts_with('|'));
+        assert!(row(&view.frame(0, 100, TALL, &theme), "dns").unwrap().starts_with('.'));
+        assert!(
+            row(&view.frame(0, 100, TALL, &theme), "email")
+                .unwrap()
+                .starts_with('.')
+        );
+        assert!(
+            row(&view.frame(0, 100, TALL, &theme), "infra")
+                .unwrap()
+                .starts_with('|')
+        );
         view.on_progress(&Progress::Done(Part::Asn));
-        assert!(row(&view.frame(0, 100, &theme), "infra").unwrap().starts_with('.'));
+        assert!(
+            row(&view.frame(0, 100, TALL, &theme), "infra")
+                .unwrap()
+                .starts_with('.')
+        );
+    }
+
+    #[test]
+    fn a_short_terminal_gets_a_frame_that_fits() {
+        let mut view = SiteView::new("example.com", Selection::all());
+        view.on_progress(&Progress::Redirect {
+            hop: 0,
+            from: "https://example.com/".to_owned(),
+            to: "https://www.example.com/".to_owned(),
+            status: 301,
+            took: ms(77),
+        });
+        for (p, t) in [(Phase::Dns, 7), (Phase::Tcp, 13), (Phase::Tls, 14), (Phase::Ttfb, 199)] {
+            view.on_progress(&phase(1, p, t));
+        }
+        let whole = plain(&view.frame(0, 100, TALL, &ascii()));
+        assert!(whole.len() > 12, "{whole:#?}");
+        for height in [2, 3, 8, 12, whole.len(), whole.len() + 1] {
+            let lines = plain(&view.frame(0, 100, height, &ascii()));
+            assert!(lines.len() < height || lines == whole, "{height}: {lines:#?}");
+        }
+        // At height 8: the header and the phase rows first, then the count of the rest.
+        let lines = plain(&view.frame(0, 100, 8, &ascii()));
+        assert_eq!(lines.len(), 7, "{lines:#?}");
+        assert!(lines[0].contains("insite"), "{lines:#?}");
+        assert!(lines.iter().any(|l| l.contains("--301-->")));
+        let last = lines.last().unwrap();
+        assert!(last.trim_start().starts_with('+') && last.ends_with(" more"), "{last}");
+        let hidden: usize = last
+            .trim()
+            .trim_start_matches('+')
+            .split(' ')
+            .next()
+            .unwrap()
+            .parse()
+            .unwrap();
+        // What was left out is what the whole frame has beyond the shown lines.
+        let shown = lines.len() - 1;
+        let blanks = whole[shown..].iter().filter(|l| l.is_empty()).count();
+        assert_eq!(hidden, whole.len() - shown - blanks, "{lines:#?}");
+        // Never an empty frame with room, never a line with none.
+        assert!(view.frame(0, 100, 1, &ascii()).is_empty());
     }
 
     #[test]
     fn only_the_selected_modules_get_a_row() {
         let view = SiteView::new("example.com", Selection::parse("tls,dns").unwrap());
-        let lines = view.frame(0, 100, &ascii());
+        let lines = view.frame(0, 100, TALL, &ascii());
         for label in ["tls", "dns", "email"] {
             assert!(row(&lines, label).is_some(), "{label}");
         }
@@ -1000,7 +1088,7 @@ pub(super) mod tests {
         ] {
             view.on_progress(&phase(1, p, t));
         }
-        let live = view.frame(0, 100, &Theme::plain_ascii());
+        let live = view.frame(0, 100, TALL, &Theme::plain_ascii());
         let done = final_lines(&report, 100, &Theme::plain_ascii(), false);
         let rows = |lines: &[String]| -> Vec<String> {
             ["dns", "tcp", "tls", "ttfb", "download"]
@@ -1031,7 +1119,7 @@ pub(super) mod tests {
             status: 302,
             took: ms(5),
         });
-        let joined = view.frame(0, 80, &theme).join("\n");
+        let joined = view.frame(0, 80, TALL, &theme).join("\n");
         assert!(!joined.contains("\x1b[2J") && !joined.contains("\x1b]"), "{joined:?}");
         every_escape_is_sgr(&joined);
 
@@ -1172,7 +1260,7 @@ pub(super) mod tests {
         let mut view = SiteView::new("example.com", Selection::all());
         view.on_progress(&phase(0, Phase::Dns, 7));
         let width_of = |view: &SiteView| {
-            strip(phase_row(&view.frame(0, 100, &ascii()), "dns").unwrap())
+            strip(phase_row(&view.frame(0, 100, TALL, &ascii()), "dns").unwrap())
                 .matches('#')
                 .count()
         };
