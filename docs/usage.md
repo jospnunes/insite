@@ -14,7 +14,7 @@ insite explain
 insite update
 ```
 
-A URL can be a bare domain: `https://` is assumed. With no URL, insite reads
+A URL can be a bare domain: insite adds `https://`. With no URL, insite reads
 them from standard input, one per line.
 
 ```
@@ -81,9 +81,9 @@ $ insite explain
 ### `insite update`
 
 Downloads the newest webappanalyzer signatures into the cache directory
-(`~/.cache/insite/signatures` on Linux; `$XDG_CACHE_HOME` is honoured). The
-embedded set is used until then, and a downloaded set is used only when it is
-newer.
+(`~/.cache/insite/signatures` on Linux; `$XDG_CACHE_HOME` is honoured). Until
+then insite uses the embedded set, and it switches to a downloaded set only when
+that set is newer.
 
 | Option | What it does |
 | --- | --- |
@@ -104,7 +104,7 @@ $ insite a.com b.com
 $ insite < sites.txt
 ```
 
-In a list, blank lines are skipped, and so is everything after a `#`.
+In a list, insite skips blank lines and everything after a `#`.
 
 Up to `--concurrency` sites run at the same time (8 by default). Analyses of
 the same registrable domain run one after another, with a pause between them.
@@ -140,7 +140,7 @@ paths, or you can set `CHROME_PATH`. It runs on Linux and macOS. It does not run
 on Windows yet; the browser module reports that it is not available on that
 platform.
 
-The metrics are lab measurements and always carry their profile. An LCP
+Metrics are lab measurements, and each carries its profile. An LCP
 measured without throttling is not the PageSpeed one. Use `--throttle` for
 numbers comparable to Lighthouse mobile, and `--desktop` to measure as a
 desktop.
@@ -150,7 +150,7 @@ type, the heaviest resources, the third-party share, console errors and the
 stack that only JavaScript reveals.
 
 The browser takes its proxy from `HTTPS_PROXY`. Chrome takes no credentials on
-the command line, so a proxy that needs them is left out, with a warning, and
+the command line, so insite drops a proxy that needs them, prints a warning, and
 the browser connects directly.
 
 ## Live output
@@ -206,8 +206,8 @@ How it adapts:
   16-colour palette otherwise.
 - **Symbols.** Without UTF-8 in the locale, they fall back to ASCII.
 - **Width.** Below 60 columns the bars go away and the lines become compact.
-- **Speed.** The animation only draws what the analysis already produced and
-  never delays it.
+- **Speed.** The animation draws what the analysis produced and adds no
+  delay.
 - **`--from`.** On an interactive terminal it shows the same final screen,
   without animation.
 
@@ -247,7 +247,7 @@ by hand. Set `NO_COLOR` for plain text there.
 ## Your own signatures
 
 Put files in the webappanalyzer format in a `fingerprints` folder inside the
-insite configuration directory. They are added to the embedded signatures and
+insite configuration directory. insite adds them to the embedded signatures, and they
 override technologies of the same name.
 
 | OS | Folder |
@@ -256,7 +256,7 @@ override technologies of the same name.
 | macOS | `~/Library/Application Support/insite/fingerprints/*.json` |
 | Windows | `%APPDATA%\insite\fingerprints\*.json` |
 
-Signatures that cannot be loaded are ignored, with a warning on standard error.
+insite ignores signatures it cannot load and warns on standard error.
 
 ## JSON output
 
