@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 - 2026-10-30
+## 0.1.0 - 2026-10-31
 
 First release. insite is a command-line tool that gives a full X-ray of a website in about a second, from a single binary: network, TLS, DNS and e-mail, infrastructure, technology stack, security grade, technical SEO and page weight. It is passive: it reads what any visitor would see.
 
