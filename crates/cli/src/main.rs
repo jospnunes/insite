@@ -95,7 +95,8 @@ struct Args {
     #[arg(long)]
     desktop: bool,
 
-    /// Deadline for the browser, from the start (default 20 s, 60 s with --throttle)
+    /// Deadline for the browser, from when it gets a browser slot: the start, unless a batch
+    /// has to wait for one (default 20 s, 60 s with --throttle)
     #[arg(long, value_name = "SECONDS")]
     browser_timeout: Option<f64>,
 

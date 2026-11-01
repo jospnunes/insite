@@ -38,7 +38,7 @@ internal one.
 | `-b`, `--browser` | Also load the page in a headless Chrome. See [Browser mode](#browser-mode). |
 | `--throttle` | Core Web Vitals comparable to Lighthouse mobile. Implies `--browser`. |
 | `--desktop` | Emulate a desktop instead of a phone in the browser. |
-| `--browser-timeout <seconds>` | Deadline for the browser, counted from the start. Default 20, or 60 with `--throttle`. |
+| `--browser-timeout <seconds>` | Deadline for the browser, counted from when its browser slot is acquired (the start, unless a batch has to wait for a slot). Default 20, or 60 with `--throttle`. |
 | `-j`, `--json` | Print the report as JSON (an array with several sites). Cannot be combined with `--ndjson` or `--md`. |
 | `--ndjson` | Print one JSON report per line, as each site finishes. Cannot be combined with `--json` or `--md`. |
 | `--md` | Print the report as Markdown, ready to paste into an e-mail or a proposal. |
