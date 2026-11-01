@@ -16,7 +16,7 @@ First release. insite is a command-line tool that gives a full X-ray of a websit
 - The port 80 redirect route (the HTTP-to-HTTPS check) is followed in parallel with the page, so it does not wait for the main request.
 - `--save` and `--from` store and re-analyze snapshots without network.
 - `insite explain <id>` describes a finding and how to fix it; `insite update` fetches the newest signatures; your own signatures can be added.
-- Install: shell and PowerShell installers, Homebrew (`brew install jospnunes/tap/insite`), AUR (`insite-bin`), `.deb` and `.rpm` packages for x86_64 and aarch64, `cargo install insite` and Scoop (`scoop bucket add insite https://github.com/jospnunes/scoop-bucket`).
+- Install: shell and PowerShell installers, Homebrew (`brew install jospnunes/tap/insite`), `.deb` and `.rpm` packages for x86_64 and aarch64, `cargo install insite` and Scoop (`scoop bucket add insite https://github.com/jospnunes/scoop-bucket`).
 
 ### Measured
 

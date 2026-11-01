@@ -25,12 +25,6 @@ Homebrew (macOS e Linux):
 brew install jospnunes/tap/insite
 ```
 
-Arch Linux (AUR):
-
-```bash
-yay -S insite-bin
-```
-
 Debian, Ubuntu, Fedora e derivados: baixe o pacote na [página de releases](https://github.com/jospnunes/insite/releases/latest), para x86_64 ou aarch64.
 
 ```bash
