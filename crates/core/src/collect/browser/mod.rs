@@ -151,7 +151,12 @@ impl Browser {
             .arg(format!("--user-data-dir={}", profile.display()))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped());
+            .stderr(Stdio::piped())
+            // Its own process group, with the browser as leader: its helpers
+            // (zygote, renderers, GPU, network service, crashpad) join it, and
+            // `kill_group` ends them all. A Ctrl-C at the terminal no longer
+            // reaches the browser directly; we stop it ourselves.
+            .process_group(0);
         // SAFETY: geteuid has no preconditions.
         if unsafe { libc::geteuid() } == 0 {
             command.arg("--no-sandbox");
@@ -491,6 +496,11 @@ impl Browser {
 /// future) must not outlive us or leave its profile behind.
 impl Drop for Browser {
     fn drop(&mut self) {
+        // The whole group, not only the leader: the helpers would outlive it
+        // for a moment and keep writing into the profile. The leader is not
+        // reaped yet, so its id is still the group's.
+        #[cfg(unix)]
+        kill_group(self.child.id());
         let _ = self.child.kill();
         let _ = self.child.wait();
         // The process is gone: its id may be reused, so it leaves the registry.
@@ -538,7 +548,52 @@ impl Drop for Profile {
         if let Ok(mut live) = LIVE.lock() {
             live.retain(|(p, _)| *p != self.path);
         }
-        let _ = std::fs::remove_dir_all(&self.path);
+        remove_dir_with_retry(&self.path);
+    }
+}
+
+/// How long a profile removal keeps trying.
+const REMOVE_BUDGET: Duration = Duration::from_millis(500);
+
+/// Deletes `path`, trying again for a short while when the browser's last
+/// writes race with the removal (the directory is not empty by the time it is
+/// removed, or a file vanishes under the walk). Best effort: other errors, and
+/// running out of time, are ignored.
+fn remove_dir_with_retry(path: &Path) {
+    let until = std::time::Instant::now() + REMOVE_BUDGET;
+    let mut pause = Duration::from_millis(2);
+    loop {
+        let racing = match std::fs::remove_dir_all(path) {
+            Ok(()) => return,
+            Err(e) => match e.kind() {
+                std::io::ErrorKind::NotFound => {
+                    if !path.exists() {
+                        return;
+                    }
+                    true
+                }
+                std::io::ErrorKind::DirectoryNotEmpty => true,
+                _ => false,
+            },
+        };
+        if !racing || std::time::Instant::now() >= until {
+            return;
+        }
+        std::thread::sleep(pause);
+        pause = (pause * 2).min(Duration::from_millis(50));
+    }
+}
+
+/// Ends the process group `leader` heads, with every helper in it.
+#[cfg(unix)]
+fn kill_group(leader: u32) {
+    // Ids 0 and 1 would mean our own group and init's: never a browser's.
+    if let Ok(pgid) = i32::try_from(leader)
+        && pgid > 1
+    {
+        // SAFETY: kill has no memory preconditions; the group is one we created
+        // with `process_group(0)` and its leader has not been waited for.
+        unsafe { libc::kill(-pgid, libc::SIGKILL) };
     }
 }
 
@@ -551,14 +606,13 @@ pub fn cleanup_all() {
     };
     for (path, pid) in live {
         #[cfg(unix)]
-        if let Some(pid) = pid.and_then(|p| i32::try_from(p).ok()) {
-            // SAFETY: kill has no memory preconditions; the pid is of a child of ours
-            // that has not been waited for.
-            unsafe { libc::kill(pid, libc::SIGKILL) };
+        if let Some(pid) = pid {
+            // The leader of a group of ours, not yet waited for.
+            kill_group(pid);
         }
         #[cfg(not(unix))]
         let _ = pid;
-        let _ = std::fs::remove_dir_all(path);
+        remove_dir_with_retry(&path);
     }
 }
 

@@ -235,3 +235,25 @@ async fn a_dropped_browser_removes_its_profile() {
     drop(browser);
     assert!(!profile.exists());
 }
+
+/// The browser's helper processes (zygote, renderers, GPU, network service)
+/// outlive its main process for a moment and keep writing into the profile, so
+/// one drop can race the removal. Many in a row make the race near certain.
+#[cfg(unix)]
+#[tokio::test]
+async fn dropped_browsers_never_leave_a_profile_behind() {
+    if !chrome() {
+        return;
+    }
+    let deadline = Deadline::new(tokio::time::Instant::now() + Duration::from_secs(120), None);
+    let mut left = Vec::new();
+    for _ in 0..10 {
+        let browser = Browser::launch(None, &deadline).await.expect("the browser starts");
+        let profile = browser.profile().to_path_buf();
+        drop(browser);
+        if profile.exists() {
+            left.push(profile);
+        }
+    }
+    assert!(left.is_empty(), "profiles left behind: {left:?}");
+}
