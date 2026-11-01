@@ -127,20 +127,6 @@ Ele é passivo. Lê o que qualquer visitante veria, sem varredura de portas, sem
 
 > **Não aponte o insite para alvos não confiáveis a partir de uma rede sensível.** Ele segue redirecionamentos, e a URL de `Sitemap:` do `robots.txt`, para qualquer endereço que apontem, inclusive endereços privados. Um site hostil pode fazê-lo requisitar um endereço interno.
 
-## Comparação com outras ferramentas
-
-Cada célula vem do README ou da documentação da própria ferramenta. Um traço significa que ela não menciona o item.
-
-| | Stack | TLS | Cabeçalhos de segurança | DNS e e-mail | SEO | Web Vitals |
-| --- | --- | --- | --- | --- | --- | --- |
-| insite | sim | sim | nota de A+ a F | sim | sim | com `--browser` |
-| [httpx](https://github.com/projectdiscovery/httpx) | base do Wappalyzer (`-tech-detect`) | coleta de dados (`-tls-grab`) | sonda do cabeçalho CSP | CNAME e IP | - | - |
-| [WhatWeb](https://github.com/urbanadventurer/WhatWeb) | mais de 1800 plugins | - | - | - | - | - |
-| [testssl.sh](https://github.com/testssl/testssl.sh) | - | protocolos, cifras, falhas conhecidas, certificado | HSTS e outros (`--header`) | CAA; MX sobre STARTTLS (`--mx`) | - | - |
-| [Lighthouse](https://github.com/GoogleChrome/lighthouse) | - | só o uso de HTTPS | HSTS, clickjacking, CSP | - | sim | LCP, CLS, TBT |
-
-O testssl.sh testa falhas conhecidas como Heartbleed e ROBOT, que o insite não testa, e o Lighthouse também audita acessibilidade. O insite relata todas essas áreas numa passada passiva. Ele não substitui a profundidade dessas ferramentas.
-
 ## Para agentes de IA e scripts
 
 `--json` e `--ndjson` imprimem o relatório como dados, um relatório por site (dois com `--ndjson --browser`: `fast` e depois `full`), e `--md` escreve um Markdown para colar no contexto de um modelo. Os `id` e `params` dos achados são estáveis, os títulos e textos podem mudar, e o `schema_version` segue semver. Códigos de saída: 0 completo, 1 inacessível, 2 erro de uso, 3 parcial, 130 interrompido.

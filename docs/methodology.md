@@ -105,9 +105,5 @@ deduction.
 
 ## Limits
 
-- insite does not replace the dedicated tools. WhatWeb and Wappalyzer go deeper
-  on the stack, SSL Labs on TLS, the Observatory on headers, Lighthouse on Web
-  Vitals. insite reports on all of these areas in one passive pass, and Web
-  Vitals only with `--browser`.
 - Sites that challenge non-browser clients give a partial report (exit code 3).
 - Browser metrics are lab measurements and carry their profile.

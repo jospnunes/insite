@@ -127,20 +127,6 @@ It is passive. It reads what any visitor would see, with no port scans, path fuz
 
 > **Do not point insite at untrusted targets from a sensitive network.** It follows redirects, and the `Sitemap:` URL in `robots.txt`, to whatever address they point to, private addresses included. A hostile site can make it request an internal one.
 
-## Compared with other tools
-
-Each cell comes from the tool's own README or docs. A dash means they do not mention it.
-
-| | Stack | TLS | Security headers | DNS and e-mail | SEO | Web Vitals |
-| --- | --- | --- | --- | --- | --- | --- |
-| insite | yes | yes | A+ to F grade | yes | yes | with `--browser` |
-| [httpx](https://github.com/projectdiscovery/httpx) | Wappalyzer dataset (`-tech-detect`) | data grab (`-tls-grab`) | CSP header probe | CNAME and IP | - | - |
-| [WhatWeb](https://github.com/urbanadventurer/WhatWeb) | 1800+ plugins | - | - | - | - | - |
-| [testssl.sh](https://github.com/testssl/testssl.sh) | - | protocols, ciphers, named flaws, certificate | HSTS and others (`--header`) | CAA; MX over STARTTLS (`--mx`) | - | - |
-| [Lighthouse](https://github.com/GoogleChrome/lighthouse) | - | HTTPS use only | HSTS, clickjacking, CSP | - | yes | LCP, CLS, TBT |
-
-testssl.sh tests named flaws such as Heartbleed and ROBOT, which insite does not, and Lighthouse also audits accessibility. insite reports on all these areas in one passive pass. It does not replace their depth.
-
 ## For AI agents and scripts
 
 `--json` and `--ndjson` print the report as data, one report per site (two with `--ndjson --browser`: `fast`, then `full`), and `--md` writes Markdown you can paste into a model's context. Finding `id` and `params` are stable, titles and texts may change, and `schema_version` follows semver. Exit codes: 0 complete, 1 unreachable, 2 usage error, 3 partial, 130 interrupted.
