@@ -13,7 +13,7 @@ First release. insite is a command-line tool that gives a full X-ray of a websit
 - Output: terminal, `--json`, `--ndjson`, `--md`.
 - Live terminal output: on an interactive terminal the analysis is drawn as it happens (request phases as bars, modules settling one by one, the browser step and the batch table), and the final screen stays in the scrollback. It turns itself off for pipes and files, `--json`, `--ndjson`, `--md`, `NO_COLOR` and `TERM=dumb`, where the output is the same plain text as before.
 - Batch mode: several sites as arguments or on standard input.
-- The port 80 redirect route (the HTTP-to-HTTPS check) is now followed in parallel with the page, so it no longer waits for the main request.
+- The port 80 redirect route (the HTTP-to-HTTPS check) is followed in parallel with the page, so it does not wait for the main request.
 - `--save` and `--from` store and re-analyze snapshots without network.
 - `insite explain <id>` describes a finding and how to fix it; `insite update` fetches the newest signatures; your own signatures can be added.
 - Install: shell and PowerShell installers, Homebrew (`brew install jospnunes/tap/insite`), AUR (`insite-bin`), `.deb` and `.rpm` packages for x86_64 and aarch64, `cargo install insite` and Scoop (`scoop bucket add insite https://github.com/jospnunes/scoop-bucket`).
@@ -28,7 +28,7 @@ How these were measured: [docs/methodology.md](https://github.com/jospnunes/insi
 
 ### Known limits
 
-- Analysis overhead is a median of 130 ms on that VPS (60 to 100 ms on a laptop), above the 50 ms target. Accepted for now.
+- Analysis overhead is a median of 130 ms on that VPS (60 to 100 ms on a laptop), above the 50 ms target. Known limit.
 - `--browser` does not run on Windows yet; the browser module reports that it is not available on this platform.
 - On the Windows console, colours and width go through crossterm and have not been checked by hand; set `NO_COLOR` for plain text.
 - The security grade does not reproduce the Observatory's CORS -50 case, which needs a cross-origin request.

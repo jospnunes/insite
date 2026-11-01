@@ -11,7 +11,7 @@ is built is in
 
 ## Principles
 
-**Fast enough to be a selling point.** Work that depends on nothing else
+**Fast enough to notice.** Work that depends on nothing else
 starts at t = 0. The report does not wait past its deadline (`--timeout`, 5
 seconds by default). The HTTP-to-HTTPS check on port 80 runs in parallel with
 the page, so it does not wait for the main request. [Timing](#timing) has the
@@ -53,7 +53,7 @@ Result, run from a VPS in Boston on 30 Oct 2026:
 | Brazilian sites, slower from the VPS | 1424 ms |
 | Analysis overhead, median, on that VPS | 130 ms (60 to 100 ms on a laptop) |
 
-The analysis overhead is above the 50 ms target. That is accepted for now.
+The analysis overhead is above the 50 ms target. Known limit.
 
 ## Precision of the stack detection
 
@@ -97,8 +97,7 @@ Observatory.
 
 Comparison: we ran insite on 26 sites and compared grade and score with the
 Observatory's published scans of the same sites. They matched wherever both saw
-the same page. The repository does not record the date of this comparison or
-the list of 26 sites.
+the same page.
 
 One gap is known. The CORS test's -50 case needs a request with an `Origin`
 from another origin. insite does not send one, so it does not apply that
