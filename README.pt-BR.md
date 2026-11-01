@@ -161,7 +161,7 @@ Mais dois achados foram cortados. Se um agente escolhe os alvos, vale o aviso ac
 
 - [Uso](https://github.com/jospnunes/insite/blob/main/docs/usage.md): todas as opções, modo lote, modo navegador, saída ao vivo, assinaturas próprias, estabilidade do JSON (em inglês).
 - [Metodologia](https://github.com/jospnunes/insite/blob/main/docs/methodology.md): princípios, tempo, precisão, a comparação com o Observatory (em inglês).
-- [Arquitetura](https://github.com/jospnunes/insite/blob/main/docs/arquitetura.md): o documento de desenho, em português.
+- [Arquitetura](https://github.com/jospnunes/insite/blob/main/docs/architecture.md): como a coleta, a análise, o motor de assinaturas e o modo navegador se encaixam (em inglês).
 - [Changelog](https://github.com/jospnunes/insite/blob/main/CHANGELOG.md).
 
 O insite é software livre sob a GPL-3.0-or-later. A consulta de AS usa o serviço DNS público de IP para ASN da Team Cymru. O insite não é afiliado a nenhum dos projetos abaixo nem endossado por eles.

@@ -5,9 +5,9 @@ were measured. You can rerun the timing with `scripts/measure-time.py` on
 `bench/sites.tsv`, and the labels behind the precision number are in
 `bench/labels.tsv`. The 26-site Observatory comparison used the Observatory's
 published scans. The command-line reference is in
-[usage.md](https://github.com/jospnunes/insite/blob/main/docs/usage.md). The
-design document, in Portuguese, is
-[arquitetura.md](https://github.com/jospnunes/insite/blob/main/docs/arquitetura.md).
+[usage.md](https://github.com/jospnunes/insite/blob/main/docs/usage.md). How the code
+is built is in
+[architecture.md](https://github.com/jospnunes/insite/blob/main/docs/architecture.md).
 
 ## Principles
 

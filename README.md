@@ -161,7 +161,7 @@ Two more findings are trimmed. If an agent picks the targets, the warning above 
 
 - [Usage](https://github.com/jospnunes/insite/blob/main/docs/usage.md): every option, batch mode, browser mode, live output, your own signatures, JSON stability.
 - [Methodology](https://github.com/jospnunes/insite/blob/main/docs/methodology.md): principles, timing, precision, the Observatory comparison.
-- [Architecture](https://github.com/jospnunes/insite/blob/main/docs/arquitetura.md): the design document, in Portuguese.
+- [Architecture](https://github.com/jospnunes/insite/blob/main/docs/architecture.md): how collection, analysis, the signature engine and the browser mode fit together.
 - [Changelog](https://github.com/jospnunes/insite/blob/main/CHANGELOG.md).
 
 insite is free software under the GPL-3.0-or-later. AS lookups use Team Cymru's public IP-to-ASN DNS service. insite is not affiliated with or endorsed by any project below.

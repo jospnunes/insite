@@ -14,7 +14,7 @@ use std::path::{Path, PathBuf};
 use insite_core::analyze::analyze;
 use insite_core::snapshot::Snapshot;
 
-/// The v0.1 exit criterion (docs/arquitetura.md, "Roadmap").
+/// The minimum, as docs/architecture.md ("Testing") describes it.
 const MIN_PRECISION: f64 = 0.95;
 
 fn fixtures() -> Option<PathBuf> {

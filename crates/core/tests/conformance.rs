@@ -17,7 +17,7 @@ use std::process::{Command, Stdio};
 use insite_core::analyze::stack::reference_case;
 use insite_core::snapshot::Snapshot;
 
-/// The v0.1 exit criterion (docs/arquitetura.md, "Roadmap").
+/// The minimum, as docs/architecture.md ("Testing") describes it.
 const MIN_F1: f64 = 0.90;
 
 fn snapshot(path: &Path) -> Snapshot {
