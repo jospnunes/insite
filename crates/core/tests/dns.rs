@@ -243,7 +243,7 @@ async fn name_servers_on_private_addresses_are_not_asked() {
     // No port override: name servers are asked on port 53, as in real use.
     let resolver = Resolver::with_nameserver(serve(zone).await).unwrap();
     assert!(resolver.authoritative("127.0.0.1".parse().unwrap()).is_err());
-    assert!(resolver.authoritative("192.168.15.1".parse().unwrap()).is_err());
+    assert!(resolver.authoritative("192.168.1.1".parse().unwrap()).is_err());
     assert!(resolver.authoritative("fd00::1".parse().unwrap()).is_err());
     assert!(resolver.authoritative("8.8.8.8".parse().unwrap()).is_ok());
 
