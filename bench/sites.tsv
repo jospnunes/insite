@@ -1,5 +1,5 @@
-# Reference list: every speed and precision target is measured on these 100 sites
-# (docs/architecture.md, "Testing"). segment<TAB>input<TAB>platform the
+# Reference list: every speed and precision figure is measured on these 100 sites
+# (docs/methodology.md). segment<TAB>input<TAB>platform the
 # segment asks for, as found when the site was chosen. A site that disappears or
 # changes platform is replaced by another of the same segment, noted in git history.
 br-institucional	petrobras.com.br	

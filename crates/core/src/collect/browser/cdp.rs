@@ -1,6 +1,6 @@
 //! A minimal Chrome DevTools Protocol client over `--remote-debugging-pipe`:
 //! JSON messages terminated by a NUL byte, commands on the child's fd 3,
-//! responses and events on its fd 4. A dozen methods, no generated types.
+//! responses and events on its fd 4. About twenty commands, no generated types.
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};

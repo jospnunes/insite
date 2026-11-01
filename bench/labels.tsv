@@ -1,4 +1,4 @@
-# Hand-labeled detections on 20 sites of bench/sites.tsv (2026-10-29), insite at 6458ef9.
+# Hand-labeled detections on 20 sites of bench/sites.tsv. One of them has no detections, so it has no rows.
 # verdict: correct, wrong (the evidence does not show the technology) or uncertain.
 # Domain-verification TXT records and SPF includes count as use of the service.
 site	technology	version	verdict	reason
